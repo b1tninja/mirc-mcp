@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from mirc_mcp.bridge import MircBridge, MircError  # noqa: E402
 from mirc_mcp.policy import Policy, PolicyError  # noqa: E402
-from mirc_mcp.server import Mirc  # noqa: E402
+from mirc_mcp.server import BRIDGE_SCRIPT_VERSION, Mirc  # noqa: E402
 
 CHAN = "#smoke"
 CRLF = "\r\n"
@@ -320,7 +320,7 @@ def main() -> int:
         wait("startup dialogs to close", closer.no_dialogs, 60)
         print(f"     closed dialogs: {sorted(set(closer.closed))}")
         bridge.command(f'/load -rs "{script}"')
-        check("bridge script loaded", wait("bridge", m.bridge_version) == "1")
+        check("bridge script loaded (current version)", wait("bridge", m.bridge_version) == BRIDGE_SCRIPT_VERSION)
         check("evaluate $version", bridge.evaluate("$version").startswith("7."), bridge.evaluate("$version"))
 
         # Test harness only: the MCP server itself has no way to issue /server.
@@ -329,6 +329,15 @@ def main() -> int:
         cid = int(conn["cid"])
         print(f"     connection: {conn}")
         check("default policy refuses a non-onion server", refused(Mirc(bridge, Policy()).windows, cid))
+        check(
+            "connections report the dialled host apart from the announced name",
+            conn["dialled_host"] == "127.0.0.1" and conn["server"] == "fake.local" and conn["dialled_port"] == str(irc.port),
+            conn,
+        )
+        check(
+            "policy is checked against the dialled host, not the 001 name",
+            refused(Mirc(bridge, Policy.from_dict({"allowed_servers": ["fake.local"]})).windows, cid),
+        )
 
         m.command(cid, "join", CHAN, "")
         w = wait("joined", lambda: m.windows(cid)["channels"])
@@ -366,7 +375,7 @@ def main() -> int:
         check("script refuses verb outside its list", not any("PRIVMSG alice" in l for l in irc.received[before:]))
 
         check("refuses whois of a nick not in allowed_targets", refused(m.command, cid, "whois", "alice", ""))
-        m2 = Mirc(bridge, Policy.from_dict({"allowed_servers": ["fake.local"], "allowed_targets": ["#*", "alice"]}))
+        m2 = Mirc(bridge, Policy.from_dict({"allowed_servers": ["127.0.0.1"], "allowed_targets": ["#*", "alice"]}))
         m2.command(cid, "whois", "alice", "")
         check("whois reaches server", bool(wait("WHOIS", lambda: [l for l in irc.received if l.upper().startswith("WHOIS")])))
 

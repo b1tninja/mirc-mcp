@@ -12,7 +12,7 @@
 ; for |, $ or %. The script re-checks the policy the server enforces: a fixed set of
 ; verbs, no CTCP byte, no "=nick" (DCC chat) target, no channel list or "join 0".
 
-alias mcp.version { mcp.init | return 1 }
+alias mcp.version { mcp.init | return 2 }
 alias -l mcp.max { return 500 }
 
 on *:LOAD: { mcp.init }
@@ -51,11 +51,16 @@ on *:INPUT:*: {
 alias mcp.seq { return $iif($hget(mcp.log), $hget(mcp.log, seq), 0) }
 alias mcp.msg { return $hget(mcp.log, $1) }
 
-; $mcp.conn(N) -> cid TAB status TAB server TAB network TAB me   ($mcp.conn(0) = count)
+; $mcp.conn(N) -> cid TAB status TAB server TAB network TAB me TAB dialled-host TAB dialled-port
+; ($mcp.conn(0) = count). $server is the name the server announces; $server(-1) and $port are
+; what mIRC actually dialled (the .onion name when connecting through the proxy).
 alias mcp.conn {
   if ($1 == 0) return $scon(0)
   var %t = $chr(9)
-  return $+($scon($1).cid, %t, $scon($1).status, %t, $scon($1).server, %t, $scon($1).network, %t, $scon($1).me)
+  scid $scon($1).cid
+  var %d = $server(-1), %p = $remove($port,+)
+  scid -r
+  return $+($scon($1).cid, %t, $scon($1).status, %t, $scon($1).server, %t, $scon($1).network, %t, $scon($1).me, %t, %d, %t, %p)
 }
 
 ; $mcp.chan(cid, N) -> channel TAB users TAB topic   (N = 0: count)

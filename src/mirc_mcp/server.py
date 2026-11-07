@@ -20,7 +20,7 @@ from . import certpin, dialogs, settings
 from .bridge import MircBridge, MircError
 from .policy import Policy, PolicyError
 
-BRIDGE_SCRIPT_VERSION = "1"
+BRIDGE_SCRIPT_VERSION = "2"
 log = logging.getLogger("mirc_mcp")
 
 
@@ -47,27 +47,34 @@ class Mirc:
         v = self._eval("$mcp.version")
         if v == "$mcp.version" or v == "":
             raise MircError("mcp-bridge.mrc is not loaded in mIRC (see README)")
+        if v.isdigit() and int(v) < int(BRIDGE_SCRIPT_VERSION):
+            raise MircError(f"mcp-bridge.mrc version {v} is loaded; reload version {BRIDGE_SCRIPT_VERSION} from this repo")
         return v
 
     def connections(self) -> list[dict[str, object]]:
         self.bridge_version()
         out = []
         for n in range(1, int(self._eval("$mcp.conn(0)") or 0) + 1):
-            cid, status, server, network, me = (self._eval(f"$mcp.conn({n})").split("\t") + [""] * 5)[:5]
+            cid, status, server, network, me, dialled, port = (self._eval(f"$mcp.conn({n})").split("\t") + [""] * 7)[:7]
+            # The policy is about where mIRC connects, so it is checked against the dialled host
+            # ($server(-1)), never the name the server announces in 001 (e.g. irc.znc.in via ZNC).
             allowed = True
             try:
-                self.policy.check_server(server)
+                self.policy.check_server(dialled)
             except PolicyError:
                 allowed = False
             out.append(
-                {"cid": int(cid), "status": status, "server": server, "network": network, "nick": me, "allowed": allowed}
+                {
+                    "cid": int(cid), "status": status, "server": server, "network": network, "nick": me,
+                    "dialled_host": dialled, "dialled_port": port, "allowed": allowed,
+                }
             )
         return out
 
     def _connection(self, cid: int) -> dict[str, object]:
         for c in self.connections():
             if c["cid"] == cid:
-                self.policy.check_server(str(c["server"]))
+                self.policy.check_server(str(c["dialled_host"]))
                 return c
         raise PolicyError(f"no connection with cid {cid}")
 
@@ -254,7 +261,23 @@ class Mirc:
             "dialogs": dialogs.list_dialogs(self.bridge.pid()),
             "scripts": self.scripts(),
             "bridge_script_loaded": ev("$isalias(mcp.version)") == "$true",
+            "active_dialled": {"host": ev("$server(-1)"), "port": ev("$port")},
+            "nick": {"me": ev("$me"), "mnick": ev("$mnick"), "anick": ev("$anick")},
+            "warnings": self._status_warnings(),
         }
+
+    def _status_warnings(self) -> list[str]:
+        ev = self._eval
+        out = []
+        me, mnick = ev("$me"), ev("$mnick")
+        if ev("$status") == "connected" and mnick and me.lower() != mnick.lower():
+            out.append(
+                f"mIRC's configured nick ({mnick!r}) differs from the connected nick ({me!r}). mIRC registers "
+                "with the configured nick and, when a bouncer renames it right after the welcome, sends "
+                "USERHOST for the old name to the network (verified on 7.86, independent of Local Info). "
+                "Set the configured nick to the bouncer's nick."
+            )
+        return out
 
     def open_dialogs(self) -> list[dict[str, str]]:
         return dialogs.list_dialogs(self.bridge.pid())

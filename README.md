@@ -45,6 +45,13 @@ connection, bypassing any proxy or connect guard you have set up in mIRC, so the
 Settings are changed with mIRC's own commands rather than by editing `mirc.ini`, because
 mIRC rewrites that file from memory on exit and would undo an edit made while it runs.
 
+### Nick leak through a bouncer (verified on 7.86)
+
+mIRC registers with its configured nick (`$mnick`). When a bouncer welcomes it under that nick
+and then renames it, mIRC sends `USERHOST <configured nick>` to the network straight after the
+welcome. Unticking Options > Connect > Local Info does not stop this. The fix is to set mIRC's
+configured nick to the bouncer's nick. `mirc_status` warns while the two differ.
+
 ### Certificate pinning
 
 mIRC 7.86 remembers certificates in `servers.ini` under `[sslcache]` as
@@ -90,7 +97,8 @@ command could start a `/server`, `/dcc` or `/run`.
 
 ### Layers of the guard
 
-1. **Python policy** (`policy.py`): connections must match `allowed_servers` (default
+1. **Python policy** (`policy.py`): the address mIRC *dialled* (`$server(-1)`, not the name the
+   server announces, which through a bouncer is e.g. `irc.znc.in`) must match `allowed_servers` (default
    `*.onion`), and targets must match `allowed_targets` (default `#*`, so no private
    messages until you list nicks). Channels must already be joined. Text may not contain
    `\x01` (no CTCP, so no DCC offer), CR/LF or NUL, and is capped at 400 bytes. Identifier
@@ -140,7 +148,7 @@ evaluating still work.
 ## Tests
 
 - `pytest`: policy unit tests, which need no mIRC.
-- `python tools\smoke.py`: an end-to-end test (49 checks, all passing on mIRC 7.86 on
+- `python tools\smoke.py`: an end-to-end test (51 checks, all passing on mIRC 7.86 on
   2026-11-07). It starts a throwaway mIRC with its own settings folder
   (`-r <temp> -noreg -noconnect`, no update check, identd off) and drives it by process id
   against a fake IRC server on 127.0.0.1. A background thread closes that instance's own
