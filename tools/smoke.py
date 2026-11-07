@@ -32,7 +32,69 @@ from mirc_mcp.policy import Policy, PolicyError  # noqa: E402
 from mirc_mcp.server import Mirc  # noqa: E402
 
 CHAN = "#smoke"
+CRLF = "\r\n"
 TOPIC = "smoke topic | $me %x"
+
+
+class FakeTls:
+    """TLS IRC server on 127.0.0.1 with a fresh self-signed certificate (CN=host.unknown)."""
+
+    def __init__(self, workdir: Path) -> None:
+        import datetime
+        import hashlib
+        import ssl
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.x509.oid import NameOID
+
+        key = ec.generate_private_key(ec.SECP256R1())
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "host.unknown")])
+        now = datetime.datetime.now(datetime.UTC)
+        cert = (
+            x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=30)).sign(key, hashes.SHA256())
+        )
+        self.sha256 = hashlib.sha256(cert.public_bytes(serialization.Encoding.DER)).hexdigest()
+        (workdir / "tls.crt").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        (workdir / "tls.key").write_bytes(
+            key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        )
+        self.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.ctx.load_cert_chain(workdir / "tls.crt", workdir / "tls.key")
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(8)
+        self.port = self.sock.getsockname()[1]
+        self.registered = 0
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self) -> None:
+        while True:
+            c, _ = self.sock.accept()
+            threading.Thread(target=self._one, args=(c,), daemon=True).start()
+
+    def _one(self, c: socket.socket) -> None:
+        try:
+            t = self.ctx.wrap_socket(c, server_side=True)
+            t.settimeout(10)
+            buf = b""
+            while b"USER" not in buf:
+                d = t.recv(4096)
+                if not d:
+                    return
+                buf += d
+            nick = buf.split(b"NICK ", 1)[1].split()[0].decode() if b"NICK " in buf else "x"
+            t.sendall(f":host.unknown 001 {nick} :Welcome{CRLF}:host.unknown 376 {nick} :End{CRLF}".encode())
+            self.registered += 1
+            while t.recv(4096):
+                pass
+        except OSError:
+            pass
+        finally:
+            c.close()
 
 
 class FakeIrc:
@@ -196,9 +258,11 @@ check.failed = 0  # type: ignore[attr-defined]
 
 
 def refused(fn, *a) -> bool:
+    from mirc_mcp.certpin import PinError
+
     try:
         fn(*a)
-    except PolicyError:
+    except (PolicyError, PinError):
         return True
     return False
 
@@ -227,7 +291,7 @@ def main() -> int:
     script = (ROOT / "mirc" / "mcp-bridge.mrc").resolve()
     (profile / "mirc.ini").write_text(
         "[update]\ncheck=0\n[mirc]\nnick=mcpsmoke\nanick=mcpsmoke_\nuser=smoke\nhost=\n"
-        "[ident]\nactive=no\n",
+        "[ident]\nactive=no\n[ssl]\nwarn=0\n",
         encoding="utf-8",
     )
     policy_path = profile / "policy.toml"
@@ -245,8 +309,9 @@ def main() -> int:
         return b
 
     bridge = wait("mIRC window", own_window)
-    open_policy = Policy.from_dict({"allowed_servers": ["fake.local", "127.0.0.1"], "commands": ["join", "part", "whois", "names", "topic"]})
-    m = Mirc(bridge, open_policy)
+    open_policy = Policy.from_dict({"allowed_servers": ["fake.local", "127.0.0.1"], "commands": ["join", "part", "whois", "names", "topic"], "connect_alias": "guardconnect"})
+    m = Mirc(bridge, open_policy, start_args=(f"-r{profile}", "-noreg"))
+    restarted: list[int] = []
     try:
         wait("mIRC ready", lambda: bridge.evaluate("$version"))
         closer = DialogCloser(proc.pid)
@@ -310,6 +375,54 @@ def main() -> int:
         check("MCP stdio: tools listed", expected <= set(tools[:-1]), tools)
         check("MCP stdio: list_connections over the protocol", "fake.local" in tools[-1] or "127.0.0.1" in tools[-1], tools[-1])
 
+        # ---- status, dialogs, scripts, guard connect, certificate pinning ----
+        st = m.status(10)
+        check(
+            "mirc_status has pid, $status, connections, lines, dialogs, scripts",
+            st["pid"] == proc.pid and st["active_status"] == "connected" and st["connections"]
+            and isinstance(st["status_lines"], list) and st["dialogs"] == [] and st["bridge_script_loaded"],
+            st,
+        )
+        check("close_dialog refuses a dialog outside its list", refused(m.close_dialog, "mIRC Setup"))
+        bridge.command(f"/scid {cid} /quit")
+        tls = FakeTls(profile)
+        guard = profile / "guard-test.mrc"
+        guard.write_text(f"alias guardconnect {{ server 127.0.0.1:+{tls.port} }}{CRLF}", encoding="utf-8")
+        bridge.command(f'/load -rs "{guard}"')
+        check("list_scripts shows the guard script", any(x.endswith("guard-test.mrc") for x in m.scripts()), m.scripts())
+        check("reload_script refuses a script that is not loaded", refused(m.reload_script, "nothere.mrc"))
+        r = m.reload_script("guard-test.mrc")
+        check("reload_script re-reads a loaded script", r["reloaded"].endswith("guard-test.mrc"), r)
+
+        closer.stop.set()  # from here on the test handles dialogs itself
+        time.sleep(0.6)
+        g = m.guard_connect(20)
+        check("guard_connect reports cert_failure for an unpinned self-signed cert", g["outcome"].startswith("cert_failure"), g)
+        wait("Connection Help dialog", lambda: any(d["title"] == "mIRC Connection Help" for d in m.open_dialogs()), 15)
+        msg = m.close_dialog("mIRC Connection Help")
+        check("close_dialog cancels mIRC Connection Help", msg.startswith("cancelled") and "still open" not in msg, msg)
+        bridge.command("/disconnect")
+
+        wrong = "00" * 32
+        check("pin_certificate refuses a fingerprint the server does not present", refused(m.pin_certificate, wrong, "127.0.0.1", tls.port, True))
+        check("pin_certificate refuses while mIRC runs without restart", refused(m.pin_certificate, tls.sha256, "127.0.0.1", tls.port, False))
+        check("pin_certificate refuses a non-loopback, non-onion host", refused(m.pin_certificate, tls.sha256, "example.com", tls.port, True))
+        closer.stop.set()
+        old_pid = proc.pid
+        pin = m.pin_certificate(":".join(tls.sha256[i : i + 2] for i in range(0, 64, 2)).upper(), "127.0.0.1", tls.port, True)
+        new_pid = int(pin["restarted_pid"])
+        check("pin_certificate pins after a match and restarts mIRC", pin["pinned"] and new_pid != old_pid and pin["cn"] == "host.unknown", pin)
+        restarted.append(new_pid)
+        closer = DialogCloser(new_pid)
+        closer.start()
+        wait("restarted mIRC ready", lambda: bridge.evaluate("$version"), 30)
+        time.sleep(1.5)
+        wait("startup dialogs to close (restart)", closer.no_dialogs, 60)
+        check("scripts survive the restart", any(x.endswith("guard-test.mrc") for x in m.scripts()), m.scripts())
+        g = m.guard_connect(20)
+        check("guard_connect connects once the certificate is pinned (strict mode)", g["outcome"] == "connected" and tls.registered >= 1, g)
+        check("mIRC still rejects invalid certs in general ([ssl] warn=0)", bridge.evaluate("$readini($mircini,n,ssl,warn)") in ("0", ""))
+
         # Settings last: turning the proxy on changes how this instance would connect.
         before = m.audit()
         check("audit flags proxy off, identd/DDE on", len(before["findings"]) >= 2 and not before["ok"], before)
@@ -342,6 +455,9 @@ def main() -> int:
                 proc.wait(3)
             except subprocess.TimeoutExpired:
                 proc.kill()  # /exit is ignored while a modal dialog is up
+            for pid in restarted:
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+            time.sleep(1)
             shutil.rmtree(profile, ignore_errors=True)
         bridge.close()
     print("received by fake server:", *irc.received, sep="\n  ")

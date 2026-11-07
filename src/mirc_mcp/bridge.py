@@ -154,6 +154,42 @@ class MircBridge:
             if owner.value == self._pid:
                 return hwnd
 
+    def pid(self) -> int:
+        """Process id of the mIRC this bridge addresses (pins it for later calls)."""
+        owner = wintypes.DWORD(0)
+        self._user32.GetWindowThreadProcessId(self._hwnd(), ctypes.byref(owner))
+        self._pid = owner.value
+        return owner.value
+
+    def running(self) -> bool:
+        try:
+            self._hwnd()
+            return True
+        except MircError:
+            return False
+
+    def exe_path(self) -> str:
+        """Full path of the mIRC executable (to start it again after a restart)."""
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        k = self._kernel32
+        k.OpenProcess.restype = wintypes.HANDLE
+        k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        h = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, self.pid())
+        if not h:
+            raise MircError("cannot open the mIRC process to read its path")
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            size = wintypes.DWORD(1024)
+            if not k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                raise MircError("cannot read the mIRC executable path")
+            return buf.value
+        finally:
+            k.CloseHandle(h)
+
+    def retarget(self, pid: int | None) -> None:
+        self._pid = pid
+
     def _write(self, text: str) -> None:
         if len(text) > MAX_CHARS:
             raise MircError(f"line too long for the mapping ({len(text)} > {MAX_CHARS})")

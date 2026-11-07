@@ -65,6 +65,12 @@ class Policy:
     # ports (Tor daemon 9050, Tor Browser 9150). Set allow_harden = false to drop the tool.
     tor_socks_ports: tuple[int, ...] = (9050, 9150)
     allow_harden: bool = True
+    # guard_connect runs exactly this alias (your connect-guard script's entry point) and
+    # nothing else; "" removes the tool. It must already exist as a loaded alias.
+    connect_alias: str = ""
+    # pin_certificate writes mIRC's certificate cache; reload_script re-reads a loaded script.
+    allow_pin: bool = True
+    allow_reload: bool = True
 
     @classmethod
     def load(cls, path: Path | None = None) -> Policy:
@@ -99,7 +105,16 @@ class Policy:
             read_limit=int(data.get("read_limit", d.read_limit)),  # type: ignore[arg-type]
             tor_socks_ports=tuple(int(x) for x in data.get("tor_socks_ports", list(d.tor_socks_ports))),  # type: ignore[union-attr]
             allow_harden=bool(data.get("allow_harden", d.allow_harden)),
+            connect_alias=cls._alias(str(data.get("connect_alias", d.connect_alias))),
+            allow_pin=bool(data.get("allow_pin", d.allow_pin)),
+            allow_reload=bool(data.get("allow_reload", d.allow_reload)),
         )
+
+    @staticmethod
+    def _alias(name: str) -> str:
+        if name and not re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]{0,31}", name):
+            raise PolicyError(f"connect_alias {name!r} must be a plain alias name")
+        return name
 
     def check_socks_port(self, port: int) -> None:
         if not self.allow_harden:

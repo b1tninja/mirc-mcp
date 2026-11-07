@@ -24,3 +24,9 @@ read_limit = 200
 tor_socks_ports = [9050, 9150]
 # allow_harden = false removes the harden_settings tool.
 allow_harden = true
+
+# guard_connect runs exactly this alias and nothing else ("" removes the tool).
+connect_alias = ""  # e.g. "myconnect": the alias your guard script defines
+# pin_certificate (writes mIRC's [sslcache]) and reload_script can be switched off.
+allow_pin = true
+allow_reload = true

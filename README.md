@@ -35,9 +35,33 @@ connection, bypassing any proxy or connect guard you have set up in mIRC, so the
 | `evaluate_identifier(cid, name, args, prop)` | one allowlisted identifier, e.g. `$chan(#x).topic` |
 | `audit_settings()` | reads fixed leak-relevant `mirc.ini` keys (proxy, identd, DDE, update check) after `/saveini` and lists problems; the SOCKS password key is never read |
 | `harden_settings(tor_port)` | tightening only: `/proxy -cm5+d 127.0.0.1 <port>` and `/proxy on` (SOCKS5, DCC included, user/password cleared), `/identd off`, `/ddeserver off`. The port must be in `tor_socks_ports` (default 9050, 9150); `allow_harden = false` removes the tool |
+| `mirc_status(lines)` | read-only: pid, version, `$status`/`$server`, each connection (status, server, port, ssl), the last N status-window lines, open dialogs, loaded scripts. Works without `mcp-bridge.mrc` |
+| `list_dialogs()` / `close_dialog(title)` | list mIRC's open modal dialogs; cancel one of `mIRC Options`, `mIRC Favorites`, `mIRC Connection Help`, `About mIRC` (closed with its OK once mIRC enables it), `mIRC SSL Certificate Warning` (Cancel = refuse the cert). Cancel never applies a change |
+| `list_scripts()` / `reload_script(name)` | list loaded remote scripts; `/reload -rs` one that is already loaded, by file name. It cannot load a new script. `allow_reload = false` removes it |
+| `guard_connect(wait_seconds)` | runs exactly one alias, `connect_alias` (empty by default, so the tool is off until you name your guard's alias in `policy.toml`), which must already be loaded, then reports `connected`, `cert_failure`, `resolve_failure`, `proxy_failure`, `guard_blocked`, `refused` or `pending`, with the new status lines. It never runs `/server`. `connect_alias = ""` removes it |
+| `pin_certificate(sha256, host, port, restart)` | trusts a server certificate by SHA-256 (see below). `allow_pin = false` removes it |
 
 Settings are changed with mIRC's own commands rather than by editing `mirc.ini`, because
 mIRC rewrites that file from memory on exit and would undo an edit made while it runs.
+
+### Certificate pinning
+
+mIRC 7.86 remembers certificates in `servers.ini` under `[sslcache]` as
+`nN=<SHA-1>,<subject CN>,<host as typed>,<flag>`. Ticking "Automatically accept this
+certificate in future" writes flag `1`. Tested on 7.86: an entry with flag `1` is honoured
+even when Options > Connect > SSL rejects invalid certificates (`[ssl] warn=0`), so pinning
+needs no weaker setting. Hostname checks don't apply, which suits a bouncer with a
+self-signed certificate.
+
+`pin_certificate` makes one TLS handshake to fetch the certificate the server presents. For
+a loopback host it connects directly; for a `.onion` host it goes through the first
+`tor_socks_ports` entry on 127.0.0.1. Either way the only socket opened is to 127.0.0.1. If
+the presented SHA-256 differs from the one you passed, nothing is written. On a match it
+adds or updates the `[sslcache]` line and keeps a one-time `servers.ini.mirc-mcp.bak`.
+Because mIRC rewrites `servers.ini` from memory, mIRC must be closed. With `restart=true`
+the tool closes it (`/exit -n`), writes the entry, and starts the same executable again with
+`-noconnect`. Use the host exactly as you connect to it: `127.0.0.1` for a local relay, or
+the `.onion` name.
 
 ### mIRC and Tor: what was verified (mIRC 7.86, 2026-11-07)
 
@@ -115,7 +139,7 @@ evaluating still work.
 ## Tests
 
 - `pytest`: policy unit tests, which need no mIRC.
-- `python tools\smoke.py`: an end-to-end test (29 checks, all passing on mIRC 7.86 on
+- `python tools\smoke.py`: an end-to-end test (43 checks, all passing on mIRC 7.86 on
   2026-11-07). It starts a throwaway mIRC with its own settings folder
   (`-r <temp> -noreg -noconnect`, no update check, identd off) and drives it by process id
   against a fake IRC server on 127.0.0.1. A background thread closes that instance's own

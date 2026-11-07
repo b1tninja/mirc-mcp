@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
+import re
+import ssl
+import subprocess
 import sys
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
+from pathlib import Path, PureWindowsPath
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
+from . import certpin, dialogs
 from .bridge import MircBridge, MircError
 from .policy import Policy, PolicyError
 
@@ -27,6 +34,11 @@ class Mirc:
 
     bridge: MircBridge
     policy: Policy
+    # Extra arguments when pin_certificate restarts mIRC (the smoke test passes its -r/-noreg).
+    start_args: tuple[str, ...] = ()
+    servers_ini_fallback: Path = field(
+        default_factory=lambda: Path(os.environ.get("APPDATA", "."), "mIRC", "servers.ini")
+    )
 
     def _eval(self, expr: str) -> str:
         return self.bridge.evaluate(expr)
@@ -196,6 +208,180 @@ class Mirc:
         )
         return result
 
+    # ---- status, dialogs, scripts --------------------------------------------
+
+    def status(self, lines: int) -> dict[str, object]:
+        """Read-only: connections, the last `lines` status-window lines, open dialogs, scripts.
+        Uses built-in identifiers only, so it works without mcp-bridge.mrc."""
+        lines = max(0, min(lines, 200))
+        ev = self._eval
+        conns = []
+        for n in range(1, int(ev("$scon(0)") or 0) + 1):
+            conns.append(
+                {
+                    "cid": int(ev(f"$scon({n}).cid") or 0),
+                    "status": ev(f"$scon({n}).status"),
+                    "server": ev(f"$scon({n}).server"),
+                    "port": ev(f"$scon({n}).port"),
+                    "ssl": ev(f"$scon({n}).ssl"),
+                }
+            )
+        total = int(ev("$line(Status Window,0)") or 0)
+        tail = [ev(f"$line(Status Window,{i})") for i in range(max(1, total - lines + 1), total + 1)]
+        return {
+            "pid": self.bridge.pid(),
+            "version": ev("$version"),
+            "active_status": ev("$status"),
+            "active_server": ev("$server"),
+            "connections": conns,
+            "status_lines": [t for t in tail if t.strip(" -")],
+            "dialogs": dialogs.list_dialogs(self.bridge.pid()),
+            "scripts": self.scripts(),
+            "bridge_script_loaded": ev("$isalias(mcp.version)") == "$true",
+        }
+
+    def open_dialogs(self) -> list[dict[str, str]]:
+        return dialogs.list_dialogs(self.bridge.pid())
+
+    def close_dialog(self, title: str) -> str:
+        try:
+            closed = dialogs.close(self.bridge.pid(), title)
+        except ValueError as e:
+            raise PolicyError(str(e)) from e
+        if not closed:
+            return f"no open dialog titled {title!r} (or, for About, its OK button is not enabled yet)"
+        time.sleep(0.5)
+        still = [d for d in dialogs.list_dialogs(self.bridge.pid()) if d["title"] == title]
+        return f"cancelled {title!r}" + (" but it is still open" if still else "")
+
+    def scripts(self) -> list[str]:
+        return [self._eval(f"$script({i})") for i in range(1, int(self._eval("$script(0)") or 0) + 1)]
+
+    def reload_script(self, name: str) -> dict[str, object]:
+        if not self.policy.allow_reload:
+            raise PolicyError("reload_script is disabled (allow_reload = false)")
+        matches = [p for p in self.scripts() if PureWindowsPath(p).name.lower() == name.lower()]
+        if not matches:
+            raise PolicyError(f"{name!r} is not a loaded script (loaded: {[PureWindowsPath(p).name for p in self.scripts()]})")
+        path = matches[0]
+        if re.search(r'[|$%"\x00-\x1f]', path) or not path.lower().endswith((".mrc", ".ini")):
+            raise PolicyError("refusing to reload a script whose path has characters mIRC would parse")
+        log.info("reload_script %s", path)
+        self.bridge.command(f'/reload -rs "{path}"', flood_protection=False)
+        time.sleep(0.5)
+        return {"reloaded": path, "scripts": self.scripts()}
+
+    # ---- connect through the guard -------------------------------------------
+
+    OUTCOMES = (
+        ("cert_failure", re.compile(r"certificate verify failed|invalid certificate", re.I)),
+        ("resolve_failure", re.compile(r"unable to resolve", re.I)),
+        ("proxy_failure", re.compile(r"^\* proxy:", re.I)),
+        ("guard_blocked", re.compile(r"blocked", re.I)),
+        ("refused", re.compile(r"connection refused|unable to connect", re.I)),
+    )
+
+    def guard_connect(self, wait_seconds: int) -> dict[str, object]:
+        alias = self.policy.connect_alias
+        if not alias:
+            raise PolicyError("guard_connect is disabled (connect_alias is empty)")
+        if self._eval(f"$isalias({alias})") != "$true":
+            raise PolicyError(f"alias {alias!r} is not loaded; load your guard script first")
+        before = int(self._eval("$line(Status Window,0)") or 0)
+        log.info("guard_connect /%s", alias)
+        self.bridge.command(f"/{alias}", flood_protection=False)
+        deadline = time.monotonic() + max(5, min(wait_seconds, 180))
+        outcome, new = "pending", []
+        while time.monotonic() < deadline:
+            time.sleep(1)
+            total = int(self._eval("$line(Status Window,0)") or 0)
+            new = [self._eval(f"$line(Status Window,{i})") for i in range(before + 1, total + 1)]
+            new = [t for t in new if t.strip(" -")]
+            if self._eval("$status") == "connected":
+                outcome = "connected"
+                break
+            hit = next((name for name, rx in self.OUTCOMES for t in new if rx.search(t)), None)
+            if hit:
+                outcome = hit
+                if any("retry" in t.lower() for t in new):
+                    outcome += " (mIRC is retrying)"
+                break
+        return {
+            "outcome": outcome,
+            "status": self._eval("$status"),
+            "server": self._eval("$server"),
+            "new_status_lines": new[-40:],
+            "dialogs": self.open_dialogs(),
+        }
+
+    # ---- certificate pinning ---------------------------------------------------
+
+    def _servers_ini(self) -> Path:
+        mdir = self._eval("$mircdir")
+        name = self._eval("$readini($mircini,n,files,servers)") or "servers.ini"
+        p = Path(name)
+        return p if p.is_absolute() else Path(mdir) / p
+
+    def pin_certificate(self, sha256: str, host: str, port: int, restart: bool) -> dict[str, object]:
+        if not self.policy.allow_pin:
+            raise PolicyError("pin_certificate is disabled (allow_pin = false)")
+        want = certpin.normalise_fp(sha256)
+        if not 1 <= port <= 65535:
+            raise PolicyError("port must be 1-65535")
+        host = host.lower()
+        running = self.bridge.running()
+        if running:
+            servers_ini = self._servers_ini()
+        else:
+            servers_ini = self.servers_ini_fallback
+        if running and not restart:
+            raise PolicyError(
+                "mIRC is running and rewrites servers.ini from memory, so the pin would be lost. "
+                "Pass restart=true to have mIRC closed (/exit -n), the pin written, and mIRC started "
+                "again with -noconnect."
+            )
+        try:
+            presented = certpin.fetch(host, port, self.policy.tor_socks_ports[0])
+        except (OSError, ssl.SSLError) as e:
+            raise PolicyError(f"could not fetch the certificate from {host}:{port}: {e}") from e
+        if presented.sha256 != want:
+            raise PolicyError(
+                f"fingerprint mismatch: {host}:{port} presents SHA-256 {presented.sha256}, not {want}. Nothing written."
+            )
+        exe = None
+        if running:
+            exe = self.bridge.exe_path()
+            pid = self.bridge.pid()
+            log.info("pin_certificate: closing mIRC pid %s", pid)
+            self.bridge.command("/exit -n", flood_protection=False)
+            end = time.monotonic() + 20
+            while self.bridge.running() and time.monotonic() < end:
+                time.sleep(0.3)
+            if self.bridge.running():
+                raise PolicyError("mIRC did not exit within 20 s (a modal dialog may be open); nothing written")
+            time.sleep(1)  # let mIRC finish writing its ini files
+        action = certpin.write_entry(servers_ini, presented, host)
+        result: dict[str, object] = {
+            "pinned": True,
+            "action": action,
+            "servers_ini": str(servers_ini),
+            "host": host,
+            "port": port,
+            "sha256": presented.sha256,
+            "sha1": presented.sha1,
+            "cn": presented.cn,
+        }
+        if exe:
+            args = [exe, *self.start_args, "-noconnect"]
+            proc = subprocess.Popen(args)
+            self.bridge.retarget(proc.pid)
+            end = time.monotonic() + 20
+            while not self.bridge.running() and time.monotonic() < end:
+                time.sleep(0.3)
+            result["restarted_pid"] = proc.pid
+            result["start_args"] = args[1:]
+        return result
+
 
 def build(m: Mirc) -> MCPServer:
     server = MCPServer(
@@ -211,7 +397,7 @@ def build(m: Mirc) -> MCPServer:
     def guarded(fn, *a):
         try:
             return fn(*a)
-        except (PolicyError, MircError) as e:
+        except (PolicyError, MircError, certpin.PinError) as e:
             raise ToolError(str(e)) from e
 
     @server.tool()
@@ -255,6 +441,47 @@ def build(m: Mirc) -> MCPServer:
         def harden_settings(tor_port: int = 9050) -> dict[str, object]:
             """Route mIRC through the local Tor SOCKS5 proxy (127.0.0.1:tor_port, DCC included) and turn off identd and the DDE server. Tightening only."""
             return guarded(m.harden, tor_port)
+
+    @server.tool()
+    def mirc_status(lines: int = 20) -> dict[str, object]:
+        """Read-only: pid, version, $status/$server, each connection (status, server, port, ssl), the last N status-window lines, open modal dialogs and loaded scripts."""
+        return guarded(m.status, lines)
+
+    @server.tool()
+    def list_dialogs() -> list[dict[str, str]]:
+        """List mIRC's open modal dialogs. While one is open, mIRC runs no script events (guards, buffer, cert prompt)."""
+        return guarded(m.open_dialogs)
+
+    @server.tool()
+    def close_dialog(title: str) -> str:
+        """Cancel one named mIRC dialog (mIRC Options, mIRC Favorites, mIRC Connection Help, About mIRC, mIRC SSL Certificate Warning). Cancel never applies changes; a certificate warning is refused, not accepted."""
+        return guarded(m.close_dialog, title)
+
+    @server.tool()
+    def list_scripts() -> list[str]:
+        """Full paths of the loaded remote scripts."""
+        return guarded(m.scripts)
+
+    if m.policy.allow_reload:
+
+        @server.tool()
+        def reload_script(name: str) -> dict[str, object]:
+            """Re-read an already loaded remote script by file name (e.g. 'guard.mrc') with /reload -rs. Cannot load new scripts."""
+            return guarded(m.reload_script, name)
+
+    if m.policy.connect_alias:
+
+        @server.tool()
+        def guard_connect(wait_seconds: int = 30) -> dict[str, object]:
+            """Run the configured connect-guard alias (policy connect_alias) and nothing else, then report: connected, cert_failure, resolve_failure, proxy_failure, guard_blocked, refused or pending, with the new status lines."""
+            return guarded(m.guard_connect, wait_seconds)
+
+    if m.policy.allow_pin:
+
+        @server.tool()
+        def pin_certificate(sha256: str, host: str, port: int, restart: bool = False) -> dict[str, object]:
+            """Trust a server certificate by SHA-256 fingerprint. Fetches the certificate the server presents (loopback directly, .onion via the local Tor SOCKS port) and refuses unless it matches; then writes mIRC's [sslcache] entry ('accept in future'). host must be as you connect to it (127.0.0.1 or the .onion name). mIRC must be closed, or pass restart=true to close it (/exit -n) and start it again with -noconnect."""
+            return guarded(m.pin_certificate, sha256, host, port, restart)
 
     return server
 
