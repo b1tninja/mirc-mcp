@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 import re
@@ -16,7 +17,7 @@ from pathlib import Path, PureWindowsPath
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import certpin, dialogs, settings
+from . import certpin, dialogs, mts, settings
 from .bridge import MircBridge, MircError
 from .policy import Policy, PolicyError
 
@@ -39,6 +40,7 @@ class Mirc:
     servers_ini_fallback: Path = field(
         default_factory=lambda: Path(os.environ.get("APPDATA", "."), "mIRC", "servers.ini")
     )
+    backup_dir: Path = field(default_factory=lambda: Path(os.environ.get("LOCALAPPDATA", "."), "mirc-mcp"))
 
     def _eval(self, expr: str) -> str:
         return self.bridge.evaluate(expr)
@@ -422,6 +424,84 @@ class Mirc:
             result.update(self._start_mirc(exe))
         return result
 
+    # ---- MTS themes: appearance only -----------------------------------------------
+
+    def _appearance(self) -> mts.Theme:
+        """The current colours, palette and default font, as a Theme (for backup/restore)."""
+        ev = self._eval
+        colors = [int(ev(f"$color({item})") or 0) for item in mts.COLOR_ITEMS]
+        rgb = []
+        for i in range(16):
+            v = int(ev(f"$color({i})") or 0)
+            rgb.append((v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF))
+        name = ev("$window(Status Window).font")
+        size = ev("$window(Status Window).fontsize")
+        font = None
+        if name and mts.FONT_NAME_RE.fullmatch(name) and re.fullmatch(r"-?\d{1,2}", size or "") and int(size):
+            font = mts.Font(name, int(size), ev("$window(Status Window).fontbold") == "$true")
+        return mts.Theme(name="backup", colors=colors, rgb=rgb, font=font)
+
+    def _apply_theme(self, theme: mts.Theme) -> list[str]:
+        cmds = theme.commands()
+        for c in cmds:
+            self.bridge.command(c, flood_protection=False)
+        return cmds
+
+    def apply_mts_theme(self, path: str, scheme: str | None, dry_run: bool) -> dict[str, object]:
+        if not self.policy.allow_theme:
+            raise PolicyError("apply_mts_theme is disabled (allow_theme = false)")
+        if scheme is not None and not re.fullmatch(r"\d{1,2}", scheme):
+            raise PolicyError("scheme must be a number, as in [scheme1]")
+        try:
+            theme = mts.load(Path(path), scheme)
+        except mts.ThemeError as e:
+            raise PolicyError(str(e)) from e
+        cmds = theme.commands()
+        result: dict[str, object] = {
+            "theme": theme.name,
+            "mts_version": theme.mts_version,
+            "scheme": theme.scheme,
+            "schemes_available": theme.schemes,
+            "applies": {"colors": theme.colors is not None, "rgb_palette": theme.rgb is not None, "font": theme.font is not None},
+            "ignored_code": sorted(set(theme.ignored_code)),
+            "ignored_files": sorted(set(theme.ignored_files)),
+            "ignored_other_count": len(theme.ignored_other),
+            "commands": cmds,
+            "dry_run": dry_run,
+        }
+        if not cmds:
+            result["note"] = "the theme sets no colours, palette or default font"
+            return result
+        if dry_run:
+            result["note"] = "nothing changed; call again with dry_run=false to apply"
+            return result
+        backup = self._appearance()
+        self.backup_dir.mkdir(parents=True, exist_ok=True)
+        bpath = self.backup_dir / f"appearance-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.json"
+        bpath.write_text(json.dumps(
+            {"colors": backup.colors, "rgb": backup.rgb,
+             "font": None if backup.font is None else [backup.font.name, backup.font.size, backup.font.bold]},
+            indent=1), encoding="utf-8")
+        self._apply_theme(theme)
+        result["backup"] = str(bpath)
+        return result
+
+    def restore_appearance(self, backup: str) -> dict[str, object]:
+        p = Path(backup)
+        if p.parent.resolve() != self.backup_dir.resolve() or not p.name.startswith("appearance-"):
+            raise PolicyError(f"only backups written by apply_mts_theme in {self.backup_dir} can be restored")
+        data = json.loads(p.read_text(encoding="utf-8"))
+        try:
+            theme = mts.Theme(name="restore")
+            theme.colors = mts.parse_colors(",".join(str(int(n)) for n in data["colors"]))
+            theme.rgb = mts.parse_rgb(" ".join(",".join(str(int(x)) for x in t) for t in data["rgb"]))
+            if data.get("font"):
+                n, s, b = data["font"]
+                theme.font = mts.parse_font(f"{n},{int(s)}" + (",B" if b else ""))
+        except (mts.ThemeError, KeyError, TypeError, ValueError) as e:
+            raise PolicyError(f"backup file is not valid: {e}") from e
+        return {"restored_from": str(p), "commands": self._apply_theme(theme)}
+
     # ---- restart helpers (mIRC rewrites its ini files from memory) --------------
 
     def _stop_mirc(self) -> str:
@@ -573,6 +653,18 @@ def build(m: Mirc) -> MCPServer:
         def guard_connect(wait_seconds: int = 30) -> dict[str, object]:
             """Run the configured connect-guard alias (policy connect_alias) and nothing else, then report: connected, cert_failure, resolve_failure, proxy_failure, guard_blocked, refused or pending, with the new status lines."""
             return guarded(m.guard_connect, wait_seconds)
+
+    if m.policy.allow_theme:
+
+        @server.tool()
+        def apply_mts_theme(path: str, scheme: str | None = None, dry_run: bool = True) -> dict[str, object]:
+            """Apply only the appearance of a local .mts (MTS) theme: the 26 Colors items, the 16-colour RGBColors palette and FontDefault, as /color and /font commands. Never runs theme code (Script, !Script events, Load/Unload) and never loads images, sounds or DLLs; those are listed as ignored. dry_run (default) shows the commands without changing anything. Applying first saves the current appearance and returns the backup path."""
+            return guarded(m.apply_mts_theme, path, scheme, dry_run)
+
+        @server.tool()
+        def restore_appearance(backup: str) -> dict[str, object]:
+            """Restore the colours, palette and font saved by apply_mts_theme (pass the backup path it returned)."""
+            return guarded(m.restore_appearance, backup)
 
     @server.tool()
     def disable_favorites_on_connect(restart: bool = False) -> dict[str, object]:

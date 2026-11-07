@@ -32,3 +32,5 @@ allow_pin = true
 allow_reload = true
 # guard_connect refuses unless the SOCKS5 proxy is on 127.0.0.1 with a tor_socks_ports port.
 require_proxy_for_connect = true
+# apply_mts_theme / restore_appearance (theme colours, palette and default font only).
+allow_theme = true

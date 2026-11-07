@@ -74,6 +74,8 @@ class Policy:
     # guard_connect refuses unless mIRC's SOCKS5 proxy is on and points at 127.0.0.1 on a
     # tor_socks_ports port: with the proxy off, a .onion name would go to Windows DNS.
     require_proxy_for_connect: bool = True
+    # apply_mts_theme / restore_appearance (colours, palette and default font only).
+    allow_theme: bool = True
 
     @classmethod
     def load(cls, path: Path | None = None) -> Policy:
@@ -112,6 +114,7 @@ class Policy:
             allow_pin=bool(data.get("allow_pin", d.allow_pin)),
             allow_reload=bool(data.get("allow_reload", d.allow_reload)),
             require_proxy_for_connect=bool(data.get("require_proxy_for_connect", d.require_proxy_for_connect)),
+            allow_theme=bool(data.get("allow_theme", d.allow_theme)),
         )
 
     @staticmethod

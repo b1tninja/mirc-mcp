@@ -310,7 +310,7 @@ def main() -> int:
 
     bridge = wait("mIRC window", own_window)
     open_policy = Policy.from_dict({"allowed_servers": ["fake.local", "127.0.0.1"], "commands": ["join", "part", "whois", "names", "topic"], "connect_alias": "guardconnect", "require_proxy_for_connect": False})
-    m = Mirc(bridge, open_policy, start_args=(f"-r{profile}", "-noreg"))
+    m = Mirc(bridge, open_policy, start_args=(f"-r{profile}", "-noreg"), backup_dir=profile / "backups")
     restarted: list[int] = []
     try:
         wait("mIRC ready", lambda: bridge.evaluate("$version"))
@@ -458,6 +458,45 @@ def main() -> int:
             (g["outcome"], m.open_dialogs()),
         )
         check("disable_favorites_on_connect is a no-op when already off", m.disable_favorites_on_connect(False)["changed"] is False)
+
+        # ---- MTS theme: appearance only ----
+        from mirc_mcp import mts as mts_mod
+
+        theme_colors = [(i * 3 + 1) % 16 for i in range(26)]
+        theme_rgb = [((i * 16) % 256, (255 - i * 9) % 256, (i * 31) % 256) for i in range(16)]
+        theme_file = profile / "smoke.mts"
+        theme_file.write_text(
+            "[mts]" + CRLF + "Name Smoke" + CRLF + "MTSVersion 1.1" + CRLF
+            + "Colors " + ",".join(map(str, theme_colors)) + CRLF
+            + "RGBColors " + " ".join(f"{r},{g},{b2}" for r, g, b2 in theme_rgb) + CRLF
+            + "FontDefault Consolas,10,B" + CRLF
+            + "Script evil.mrc" + CRLF + "Load !Script evil.load" + CRLF + "TextChan !Script evil.text" + CRLF,
+            encoding="utf-8",
+        )
+        (profile / "evil.mrc").write_text("alias evil.load { set %smoke.evil ran }" + CRLF, encoding="utf-8")
+        before_colors = [bridge.evaluate(f"$color({it})") for it in mts_mod.COLOR_ITEMS]
+        dry = m.apply_mts_theme(str(theme_file), None, True)
+        check(
+            "apply_mts_theme dry run lists commands, ignores code, changes nothing",
+            dry["dry_run"] and len(dry["commands"]) == 43 and set(dry["ignored_code"]) == {"script", "load", "textchan"}
+            and [bridge.evaluate(f"$color({it})") for it in mts_mod.COLOR_ITEMS] == before_colors,
+            dry,
+        )
+        res = m.apply_mts_theme(str(theme_file), None, False)
+        got_colors = [int(bridge.evaluate(f"$color({it})")) for it in mts_mod.COLOR_ITEMS]
+        got_rgb = [int(bridge.evaluate(f"$color({i})")) for i in range(16)]
+        check("apply_mts_theme sets all 26 colour items", got_colors == theme_colors, (got_colors, theme_colors))
+        check("apply_mts_theme sets the 16-colour palette", got_rgb == [r + g * 256 + b2 * 65536 for r, g, b2 in theme_rgb], got_rgb)
+        check(
+            "apply_mts_theme sets the default font (bold)",
+            bridge.evaluate("$window(Status Window).font") == "Consolas" and bridge.evaluate("$window(Status Window).fontbold") == "$true",
+        )
+        check("theme code never ran (no Script load, no Load event)", bridge.evaluate("%smoke.evil") in ("", "%smoke.evil") and not any(x.endswith("evil.mrc") for x in m.scripts()))
+        check("apply_mts_theme wrote a backup", Path(res["backup"]).is_file(), res.get("backup"))
+        check("restore_appearance refuses a file outside the backup folder", refused(m.restore_appearance, str(theme_file)))
+        m.restore_appearance(res["backup"])
+        check("restore_appearance puts the colours back", [bridge.evaluate(f"$color({it})") for it in mts_mod.COLOR_ITEMS] == before_colors)
+        check("apply_mts_theme refuses a non-.mts file", refused(m.apply_mts_theme, str(profile / "evil.mrc"), None, True))
 
         # Settings last: turning the proxy on changes how this instance would connect.
         before = m.audit()
