@@ -30,3 +30,5 @@ connect_alias = ""  # e.g. "myconnect": the alias your guard script defines
 # pin_certificate (writes mIRC's [sslcache]) and reload_script can be switched off.
 allow_pin = true
 allow_reload = true
+# guard_connect refuses unless the SOCKS5 proxy is on 127.0.0.1 with a tor_socks_ports port.
+require_proxy_for_connect = true

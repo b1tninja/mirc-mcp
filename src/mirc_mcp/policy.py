@@ -71,6 +71,9 @@ class Policy:
     # pin_certificate writes mIRC's certificate cache; reload_script re-reads a loaded script.
     allow_pin: bool = True
     allow_reload: bool = True
+    # guard_connect refuses unless mIRC's SOCKS5 proxy is on and points at 127.0.0.1 on a
+    # tor_socks_ports port: with the proxy off, a .onion name would go to Windows DNS.
+    require_proxy_for_connect: bool = True
 
     @classmethod
     def load(cls, path: Path | None = None) -> Policy:
@@ -108,6 +111,7 @@ class Policy:
             connect_alias=cls._alias(str(data.get("connect_alias", d.connect_alias))),
             allow_pin=bool(data.get("allow_pin", d.allow_pin)),
             allow_reload=bool(data.get("allow_reload", d.allow_reload)),
+            require_proxy_for_connect=bool(data.get("require_proxy_for_connect", d.require_proxy_for_connect)),
         )
 
     @staticmethod

@@ -309,7 +309,7 @@ def main() -> int:
         return b
 
     bridge = wait("mIRC window", own_window)
-    open_policy = Policy.from_dict({"allowed_servers": ["fake.local", "127.0.0.1"], "commands": ["join", "part", "whois", "names", "topic"], "connect_alias": "guardconnect"})
+    open_policy = Policy.from_dict({"allowed_servers": ["fake.local", "127.0.0.1"], "commands": ["join", "part", "whois", "names", "topic"], "connect_alias": "guardconnect", "require_proxy_for_connect": False})
     m = Mirc(bridge, open_policy, start_args=(f"-r{profile}", "-noreg"))
     restarted: list[int] = []
     try:
@@ -394,6 +394,7 @@ def main() -> int:
         r = m.reload_script("guard-test.mrc")
         check("reload_script re-reads a loaded script", r["reloaded"].endswith("guard-test.mrc"), r)
 
+        check("guard_connect refuses while the proxy is off (default policy)", refused(Mirc(bridge, Policy.from_dict({"allowed_servers": ["fake.local"], "connect_alias": "guardconnect"})).guard_connect, 5))
         closer.stop.set()  # from here on the test handles dialogs itself
         time.sleep(0.6)
         g = m.guard_connect(20)
@@ -422,6 +423,32 @@ def main() -> int:
         g = m.guard_connect(20)
         check("guard_connect connects once the certificate is pinned (strict mode)", g["outcome"] == "connected" and tls.registered >= 1, g)
         check("mIRC still rejects invalid certs in general ([ssl] warn=0)", bridge.evaluate("$readini($mircini,n,ssl,warn)") in ("0", ""))
+
+        # ---- "Show favorites on connect" ----
+        aud = m.audit()
+        check("audit flags 'Show favorites on connect'", aud["settings"]["options.favorites_on_connect"] == "1" and any("favorites" in f.lower() for f in aud["findings"]), aud["settings"])
+        check("disable_favorites_on_connect refuses without an open dialog or restart", refused(m.disable_favorites_on_connect, False))
+        closer.stop.set()
+        bridge.command("/disconnect")
+        time.sleep(1)
+        fav = m.disable_favorites_on_connect(True)
+        restarted.append(int(fav["restarted_pid"]))
+        closer = DialogCloser(int(fav["restarted_pid"]))
+        closer.start()
+        wait("mIRC ready (favorites restart)", lambda: bridge.evaluate("$version"), 30)
+        time.sleep(1.5)
+        wait("startup dialogs to close (favorites restart)", closer.no_dialogs, 60)
+        closer.stop.set()
+        time.sleep(0.6)
+        check("disable_favorites_on_connect sets it off (restart path)", fav["changed"] and m.favorites_on_connect() == "0", fav)
+        g = m.guard_connect(20)
+        time.sleep(3)
+        check(
+            "no Favorites dialog on connect afterwards",
+            g["outcome"] == "connected" and not any(d["title"] == "mIRC Favorites" for d in m.open_dialogs()),
+            (g["outcome"], m.open_dialogs()),
+        )
+        check("disable_favorites_on_connect is a no-op when already off", m.disable_favorites_on_connect(False)["changed"] is False)
 
         # Settings last: turning the proxy on changes how this instance would connect.
         before = m.audit()

@@ -16,7 +16,7 @@ from pathlib import Path, PureWindowsPath
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import certpin, dialogs
+from . import certpin, dialogs, settings
 from .bridge import MircBridge, MircError
 from .policy import Policy, PolicyError
 
@@ -186,7 +186,23 @@ class Mirc:
             findings.append("The DDE server is on: any local program can drive mIRC through it (mirc-mcp does not need it).")
         if v["update.check"] not in ("0", ""):
             findings.append("Automatic update checks are on: mIRC contacts its website directly.")
+        v["options.favorites_on_connect"] = self._eval(
+            f"$gettok($readini($mircini,n,options,{self.FAV_KEY}),{self.FAV_INDEX + 1},44)"
+        )
+        if v["options.favorites_on_connect"] != "0":
+            findings.append(
+                "'Show favorites on connect' is on: a modal Favorites dialog opens on every connect, and while "
+                "it is open mIRC runs no script events (connect guards, CTCP filters). disable_favorites_on_connect fixes it."
+            )
         return {"settings": v, "findings": findings, "ok": not findings}
+
+    def proxy_ok(self) -> bool:
+        v = self.audit()["settings"]
+        return (
+            v["socks.enabled"] == "yes" and v["socks.method"] == "5"
+            and v["socks.hostname"] in ("127.0.0.1", "localhost")
+            and v["socks.port"].isdigit() and int(v["socks.port"]) in self.policy.tor_socks_ports
+        )
 
     def harden(self, tor_port: int) -> dict[str, object]:
         """Apply fixed, tightening-only changes, then re-audit. Nothing here can loosen a setting."""
@@ -287,6 +303,12 @@ class Mirc:
             raise PolicyError("guard_connect is disabled (connect_alias is empty)")
         if self._eval(f"$isalias({alias})") != "$true":
             raise PolicyError(f"alias {alias!r} is not loaded; load your guard script first")
+        if self.policy.require_proxy_for_connect and not self.proxy_ok():
+            raise PolicyError(
+                "refusing to connect: mIRC's SOCKS5 proxy is not on 127.0.0.1 with a Tor port, so a .onion "
+                "name would be looked up in Windows DNS. Restart mIRC so the guard's on START turns it on, "
+                "or use harden_settings (with the user's OK)."
+            )
         before = int(self._eval("$line(Status Window,0)") or 0)
         log.info("guard_connect /%s", alias)
         self.bridge.command(f"/{alias}", flood_protection=False)
@@ -348,18 +370,7 @@ class Mirc:
             raise PolicyError(
                 f"fingerprint mismatch: {host}:{port} presents SHA-256 {presented.sha256}, not {want}. Nothing written."
             )
-        exe = None
-        if running:
-            exe = self.bridge.exe_path()
-            pid = self.bridge.pid()
-            log.info("pin_certificate: closing mIRC pid %s", pid)
-            self.bridge.command("/exit -n", flood_protection=False)
-            end = time.monotonic() + 20
-            while self.bridge.running() and time.monotonic() < end:
-                time.sleep(0.3)
-            if self.bridge.running():
-                raise PolicyError("mIRC did not exit within 20 s (a modal dialog may be open); nothing written")
-            time.sleep(1)  # let mIRC finish writing its ini files
+        exe = self._stop_mirc() if running else None
         # mIRC keys the cache on the IP it connected to. Through a SOCKS proxy (how a .onion is
         # reached) it never learns one and stores an empty host, so pin that form as well.
         action = certpin.write_entry(servers_ini, presented, host)
@@ -376,14 +387,65 @@ class Mirc:
             "cn": presented.cn,
         }
         if exe:
-            args = [exe, *self.start_args, "-noconnect"]
-            proc = subprocess.Popen(args)
-            self.bridge.retarget(proc.pid)
-            end = time.monotonic() + 20
-            while not self.bridge.running() and time.monotonic() < end:
-                time.sleep(0.3)
-            result["restarted_pid"] = proc.pid
-            result["start_args"] = args[1:]
+            result.update(self._start_mirc(exe))
+        return result
+
+    # ---- restart helpers (mIRC rewrites its ini files from memory) --------------
+
+    def _stop_mirc(self) -> str:
+        exe = self.bridge.exe_path()
+        log.info("closing mIRC pid %s", self.bridge.pid())
+        self.bridge.command("/exit -n", flood_protection=False)
+        end = time.monotonic() + 20
+        while self.bridge.running() and time.monotonic() < end:
+            time.sleep(0.3)
+        if self.bridge.running():
+            raise PolicyError("mIRC did not exit within 20 s (a modal dialog may be open); nothing written")
+        time.sleep(1)  # let mIRC finish writing its ini files
+        return exe
+
+    def _start_mirc(self, exe: str) -> dict[str, object]:
+        args = [exe, *self.start_args, "-noconnect"]
+        proc = subprocess.Popen(args)
+        self.bridge.retarget(proc.pid)
+        end = time.monotonic() + 20
+        while not self.bridge.running() and time.monotonic() < end:
+            time.sleep(0.3)
+        return {"restarted_pid": proc.pid, "start_args": args[1:]}
+
+    # ---- "Show favorites on connect" -------------------------------------------
+    # Verified on mIRC 7.86: [options] n4, field index 19 (0-based) is the Favorites dialog's
+    # "Show favorites on connect" checkbox (control 271); 0 stops the modal dialog on connect.
+    FAV_KEY, FAV_INDEX, FAV_CHECKBOX = "n4", 19, 271
+
+    def favorites_on_connect(self) -> str:
+        self.bridge.command("/saveini", flood_protection=False)
+        return self._eval(f"$gettok($readini($mircini,n,options,{self.FAV_KEY}),{self.FAV_INDEX + 1},44)")
+
+    def disable_favorites_on_connect(self, restart: bool) -> dict[str, object]:
+        if not self.bridge.running():
+            raise PolicyError("mIRC is not running; start it first (the tool needs it to find mirc.ini)")
+        if self.favorites_on_connect() == "0":
+            return {"changed": False, "favorites_on_connect": "0", "how": "already off"}
+        pid = self.bridge.pid()
+        open_ = dialogs.find(pid, "mIRC Favorites")
+        if open_:
+            # Untick the box in the open dialog and press OK: the only change made is that box.
+            if dialogs.set_checkbox(open_[0][0], self.FAV_CHECKBOX, False) and dialogs.press(open_[0][0], 1):
+                time.sleep(0.8)
+                return {"changed": True, "favorites_on_connect": self.favorites_on_connect(), "how": "unticked in the open Favorites dialog"}
+        if not restart:
+            raise PolicyError(
+                "mIRC keeps this setting in memory. Either call this while the Favorites dialog is open "
+                "(it appears on connect), or pass restart=true to close mIRC, set it in mirc.ini, and start "
+                "mIRC again with -noconnect."
+            )
+        ini = Path(self._eval("$mircini"))
+        exe = self._stop_mirc()
+        settings.set_options_field(ini, self.FAV_KEY, self.FAV_INDEX, "0")
+        result: dict[str, object] = {"changed": True, "how": "set in mirc.ini while mIRC was closed", "mirc_ini": str(ini)}
+        result.update(self._start_mirc(exe))
+        result["favorites_on_connect"] = self.favorites_on_connect()
         return result
 
 
@@ -479,6 +541,11 @@ def build(m: Mirc) -> MCPServer:
         def guard_connect(wait_seconds: int = 30) -> dict[str, object]:
             """Run the configured connect-guard alias (policy connect_alias) and nothing else, then report: connected, cert_failure, resolve_failure, proxy_failure, guard_blocked, refused or pending, with the new status lines."""
             return guarded(m.guard_connect, wait_seconds)
+
+    @server.tool()
+    def disable_favorites_on_connect(restart: bool = False) -> dict[str, object]:
+        """Turn off 'Show favorites on connect' (its modal dialog blocks script events on every connect). Unticks it in the open Favorites dialog, or with restart=true closes mIRC, sets it in mirc.ini and starts mIRC again with -noconnect. Tightening only."""
+        return guarded(m.disable_favorites_on_connect, restart)
 
     if m.policy.allow_pin:
 

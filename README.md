@@ -38,8 +38,9 @@ connection, bypassing any proxy or connect guard you have set up in mIRC, so the
 | `mirc_status(lines)` | read-only: pid, version, `$status`/`$server`, each connection (status, server, port, ssl), the last N status-window lines, open dialogs, loaded scripts. Works without `mcp-bridge.mrc` |
 | `list_dialogs()` / `close_dialog(title)` | list mIRC's open modal dialogs; cancel one of `mIRC Options`, `mIRC Favorites`, `mIRC Connection Help`, `About mIRC` (closed with its OK once mIRC enables it), `mIRC SSL Certificate Warning` (Cancel = refuse the cert). Cancel never applies a change |
 | `list_scripts()` / `reload_script(name)` | list loaded remote scripts; `/reload -rs` one that is already loaded, by file name. It cannot load a new script. `allow_reload = false` removes it |
-| `guard_connect(wait_seconds)` | runs exactly one alias, `connect_alias` (empty by default, so the tool is off until you name your guard's alias in `policy.toml`), which must already be loaded, then reports `connected`, `cert_failure`, `resolve_failure`, `proxy_failure`, `guard_blocked`, `refused` or `pending`, with the new status lines. It never runs `/server`. `connect_alias = ""` removes it |
+| `guard_connect(wait_seconds)` | runs exactly one alias, `connect_alias` (empty by default, so the tool is off until you name your guard's alias in `policy.toml`), which must already be loaded, then reports `connected`, `cert_failure`, `resolve_failure`, `proxy_failure`, `guard_blocked`, `refused` or `pending`, with the new status lines. It never runs `/server`, and by default (`require_proxy_for_connect`) it refuses unless mIRC's SOCKS5 proxy is on 127.0.0.1 with a Tor port, so a `.onion` name can never go to Windows DNS. `connect_alias = ""` removes it |
 | `pin_certificate(sha256, host, port, restart)` | trusts a server certificate by SHA-256 (see below). `allow_pin = false` removes it |
+| `disable_favorites_on_connect(restart)` | turns off "Show favorites on connect" (`[options] n4`, field 19 on 7.86), whose modal dialog blocks script events on every connect. Unticks it in the open Favorites dialog, or with `restart=true` closes mIRC, changes only that field in `mirc.ini` (one-time backup), and starts mIRC again. `audit_settings` reports it |
 
 Settings are changed with mIRC's own commands rather than by editing `mirc.ini`, because
 mIRC rewrites that file from memory on exit and would undo an edit made while it runs.
@@ -139,7 +140,7 @@ evaluating still work.
 ## Tests
 
 - `pytest`: policy unit tests, which need no mIRC.
-- `python tools\smoke.py`: an end-to-end test (43 checks, all passing on mIRC 7.86 on
+- `python tools\smoke.py`: an end-to-end test (49 checks, all passing on mIRC 7.86 on
   2026-11-07). It starts a throwaway mIRC with its own settings folder
   (`-r <temp> -noreg -noconnect`, no update check, identd off) and drives it by process id
   against a fake IRC server on 127.0.0.1. A background thread closes that instance's own

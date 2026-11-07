@@ -61,6 +61,27 @@ def control_text(hwnd: int) -> str:
     return buf.value
 
 
+BM_GETCHECK = 0x00F0
+
+
+def set_checkbox(dialog: int, control_id: int, checked: bool) -> bool:
+    """Set a checkbox in a dialog by clicking it only if its state differs."""
+    box = _u.GetDlgItem(dialog, control_id)
+    if not box:
+        return False
+    if (_u.SendMessageW(box, BM_GETCHECK, 0, 0) == 1) != checked:
+        _u.SendMessageW(box, BM_CLICK, 0, 0)
+    return (_u.SendMessageW(box, BM_GETCHECK, 0, 0) == 1) == checked
+
+
+def press(dialog: int, control_id: int) -> bool:
+    button = _u.GetDlgItem(dialog, control_id)
+    if not button or not _u.IsWindowEnabled(button):
+        return False
+    _u.SendMessageW(button, BM_CLICK, 0, 0)
+    return True
+
+
 def find(pid: int, title: str | None = None) -> list[tuple[int, str]]:
     """Visible dialogs (#32770) of process `pid`, optionally with an exact title."""
     out = []
