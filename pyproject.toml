@@ -3,6 +3,8 @@ name = "mirc-mcp"
 version = "0.1.0"
 description = "Local stdio MCP server for mIRC over its SendMessage interface, with an allowlist policy"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = ["mcp>=2.3,<3"]
 
 [project.optional-dependencies]
