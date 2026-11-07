@@ -25,6 +25,8 @@ CLOSABLE = frozenset(
         "mIRC Connection Help",
         "About mIRC",
         "mIRC SSL Certificate Warning",  # Cancel = refuse the certificate
+        "mIRC File Changed",  # Cancel = don't reload now (reload_script does it explicitly)
+        "Add Channel",  # Cancel = add no favourite channel
     }
 )
 

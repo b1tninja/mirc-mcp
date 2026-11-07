@@ -360,7 +360,11 @@ class Mirc:
             if self.bridge.running():
                 raise PolicyError("mIRC did not exit within 20 s (a modal dialog may be open); nothing written")
             time.sleep(1)  # let mIRC finish writing its ini files
+        # mIRC keys the cache on the IP it connected to. Through a SOCKS proxy (how a .onion is
+        # reached) it never learns one and stores an empty host, so pin that form as well.
         action = certpin.write_entry(servers_ini, presented, host)
+        if certpin.ONION_RE.fullmatch(host):
+            action += ", " + certpin.write_entry(servers_ini, presented, "") + " (proxied, empty host)"
         result: dict[str, object] = {
             "pinned": True,
             "action": action,

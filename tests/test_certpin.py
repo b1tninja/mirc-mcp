@@ -49,3 +49,11 @@ def test_adds_with_next_index(tmp_path):
 def test_rejects_cn_with_comma(tmp_path):
     with pytest.raises(PinError):
         write_entry(tmp_path / "servers.ini", Presented(P.sha256, P.sha1, "a,b"), "127.0.0.1")
+
+
+def test_updates_empty_host_entry_written_by_mirc_for_proxied_connections(tmp_path):
+    ini = tmp_path / "servers.ini"
+    sha1 = P.sha1.upper()
+    ini.write_bytes(f"[sslcache]\r\nn0={sha1},host.unknown,,0\r\n".encode())
+    assert write_entry(ini, P, "") == "updated"
+    assert f"n0={sha1},host.unknown,,1" in ini.read_text()

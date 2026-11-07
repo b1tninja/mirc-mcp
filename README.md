@@ -47,7 +47,7 @@ mIRC rewrites that file from memory on exit and would undo an edit made while it
 ### Certificate pinning
 
 mIRC 7.86 remembers certificates in `servers.ini` under `[sslcache]` as
-`nN=<SHA-1>,<subject CN>,<host as typed>,<flag>`. Ticking "Automatically accept this
+`nN=<SHA-1>,<subject CN>,<IP connected to>,<flag>`. Through a SOCKS proxy mIRC never learns the IP, so for a `.onion` reached via Tor the third field is empty; `pin_certificate` therefore writes that empty-host form too when you pin a `.onion` host (verified on 7.86: without it the pinned certificate was still rejected through the proxy). Ticking "Automatically accept this
 certificate in future" writes flag `1`. Tested on 7.86: an entry with flag `1` is honoured
 even when Options > Connect > SSL rejects invalid certificates (`[ssl] warn=0`), so pinning
 needs no weaker setting. Hostname checks don't apply, which suits a bouncer with a
