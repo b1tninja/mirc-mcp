@@ -1,0 +1,33 @@
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local configuration: your real policy and environment (policy.example.toml is the template)
+policy.toml
+*.local.toml
+.env
+.env.*
+.python-version
+
+# Local test runs: generated Windows Sandbox configs and their output
+*.wsb
+sandbox-out/
+mirc-mcp-sandbox/
+*.log
+*.out
+
+# Editors and agent settings
+.vscode/
+.idea/
+.claude/
+*.code-workspace

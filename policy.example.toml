@@ -1,0 +1,21 @@
+# Copy to %APPDATA%\mirc-mcp\policy.toml (or point MIRC_MCP_POLICY at it).
+# Every list can only narrow what the server supports; unknown entries are an error.
+
+# Connections the server may touch, matched against $server.
+allowed_servers = ["*.onion"]
+
+# Targets for messages and commands (case-insensitive globs). Add nicks to allow
+# private messages, e.g. "*status" for ZNC.
+allowed_targets = ["#*"]
+
+# Only send to channels that are already joined.
+require_joined = true
+
+# Supported: msg, notice, action
+send_kinds = ["msg", "action"]
+
+# Supported: join, part, whois, names, topic  (default: whois, names, topic)
+commands = ["whois", "names", "topic"]
+
+max_text_bytes = 400
+read_limit = 200
