@@ -33,7 +33,7 @@ connection, bypassing any proxy or connect guard you have set up in mIRC, so the
 | `send_message(cid, target, text, kind)` | `msg` / `notice` / `action` to an allowlisted target |
 | `irc_command(cid, command, target, text)` | one of `join part whois names topic` (default allows `whois names topic`) |
 | `evaluate_identifier(cid, name, args, prop)` | one allowlisted identifier, e.g. `$chan(#x).topic` |
-| `audit_settings()` | reads fixed leak-relevant `mirc.ini` keys (proxy, identd, DDE, update check) after `/saveini` and lists problems; the SOCKS password key is never read |
+| `audit_settings()` | reads fixed leak-relevant `mirc.ini` keys (proxy, identd, DDE, update check, Favorites on connect, Local Info lookup method) after `/saveini` and lists problems; the SOCKS password key is never read. The lookup method is `[options] n2` field 4 on 7.86 (0 Normal, 1 Server, 2 Website); "Website" is flagged because it fetches your IP from a web site, possibly outside the proxy |
 | `harden_settings(tor_port)` | tightening only: `/proxy -cm5+d 127.0.0.1 <port>` and `/proxy on` (SOCKS5, DCC included, user/password cleared), `/identd off`, `/ddeserver off`. The port must be in `tor_socks_ports` (default 9050, 9150); `allow_harden = false` removes the tool |
 | `mirc_status(lines)` | read-only: pid, version, `$status`/`$server`, each connection (status, server, port, ssl), the last N status-window lines, open dialogs, loaded scripts. Works without `mcp-bridge.mrc` |
 | `list_dialogs()` / `close_dialog(title)` | list mIRC's open modal dialogs; cancel one of `mIRC Options`, `mIRC Favorites`, `mIRC Connection Help`, `About mIRC` (closed with its OK once mIRC enables it), `mIRC SSL Certificate Warning` (Cancel = refuse the cert). Cancel never applies a change |
@@ -148,7 +148,7 @@ evaluating still work.
 ## Tests
 
 - `pytest`: policy unit tests, which need no mIRC.
-- `python tools\smoke.py`: an end-to-end test (51 checks, all passing on mIRC 7.86 on
+- `python tools\smoke.py`: an end-to-end test (52 checks, all passing on mIRC 7.86 on
   2026-11-07). It starts a throwaway mIRC with its own settings folder
   (`-r <temp> -noreg -noconnect`, no update check, identd off) and drives it by process id
   against a fake IRC server on 127.0.0.1. A background thread closes that instance's own

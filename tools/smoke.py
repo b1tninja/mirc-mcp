@@ -463,6 +463,7 @@ def main() -> int:
         before = m.audit()
         check("audit flags proxy off, identd/DDE on", len(before["findings"]) >= 2 and not before["ok"], before)
         check("audit never returns the SOCKS password key", not any("pw" in k for k in before["settings"]))
+        check("audit reads the Local Info lookup method (default: server)", before["settings"].get("options.localinfo_lookup") == "server", before["settings"])
         check("harden refuses a port outside tor_socks_ports", refused(m.harden, 1080))
         check("harden refused when allow_harden is false", refused(Mirc(bridge, Policy.from_dict({"allow_harden": False})).harden, 9050))
         after = m.harden(9050)

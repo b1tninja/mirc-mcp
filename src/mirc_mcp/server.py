@@ -201,6 +201,15 @@ class Mirc:
                 "'Show favorites on connect' is on: a modal Favorites dialog opens on every connect, and while "
                 "it is open mIRC runs no script events (connect guards, CTCP filters). disable_favorites_on_connect fixes it."
             )
+        # Options > Connect > Local Info > Lookup Method, verified on 7.86: [options] n2 field
+        # index 4 (0-based); 0 = Normal, 1 = Server (default), 2 = Website (icanhazip.com by default).
+        method = self._eval("$gettok($readini($mircini,n,options,n2),5,44)")
+        v["options.localinfo_lookup"] = {"0": "normal", "1": "server", "2": "website"}.get(method, method)
+        if v["options.localinfo_lookup"] == "website":
+            findings.append(
+                "Local Info looks up your IP from a website (Options > Connect > Local Info > Website): an HTTP "
+                "fetch that may not go through the proxy and would show that site your real IP. Use 'Server'."
+            )
         return {"settings": v, "findings": findings, "ok": not findings}
 
     def proxy_ok(self) -> bool:
