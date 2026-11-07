@@ -61,6 +61,10 @@ class Policy:
     identifiers: frozenset[str] = IDENTIFIERS
     max_text_bytes: int = 400
     read_limit: int = 200
+    # harden_settings may point mIRC's SOCKS5 proxy only at 127.0.0.1 on one of these
+    # ports (Tor daemon 9050, Tor Browser 9150). Set allow_harden = false to drop the tool.
+    tor_socks_ports: tuple[int, ...] = (9050, 9150)
+    allow_harden: bool = True
 
     @classmethod
     def load(cls, path: Path | None = None) -> Policy:
@@ -93,7 +97,15 @@ class Policy:
             identifiers=narrow("identifiers", IDENTIFIERS, d.identifiers),
             max_text_bytes=min(int(data.get("max_text_bytes", d.max_text_bytes)), 450),  # type: ignore[arg-type]
             read_limit=int(data.get("read_limit", d.read_limit)),  # type: ignore[arg-type]
+            tor_socks_ports=tuple(int(x) for x in data.get("tor_socks_ports", list(d.tor_socks_ports))),  # type: ignore[union-attr]
+            allow_harden=bool(data.get("allow_harden", d.allow_harden)),
         )
+
+    def check_socks_port(self, port: int) -> None:
+        if not self.allow_harden:
+            raise PolicyError("harden_settings is disabled (allow_harden = false)")
+        if port not in self.tor_socks_ports:
+            raise PolicyError(f"SOCKS port {port} not in tor_socks_ports {list(self.tor_socks_ports)}")
 
     # ---- checks -----------------------------------------------------------
 

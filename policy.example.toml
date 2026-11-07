@@ -19,3 +19,8 @@ commands = ["whois", "names", "topic"]
 
 max_text_bytes = 400
 read_limit = 200
+
+# harden_settings may point the proxy only at 127.0.0.1 on one of these ports.
+tor_socks_ports = [9050, 9150]
+# allow_harden = false removes the harden_settings tool.
+allow_harden = true

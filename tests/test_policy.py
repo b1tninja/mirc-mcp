@@ -57,3 +57,14 @@ def test_b64_is_editbox_safe():
     import re
 
     assert re.fullmatch(r"[A-Za-z0-9+/=]+", b64("héllo | $me %x {}"))
+
+
+def test_harden_ports():
+    p = Policy()
+    p.check_socks_port(9050)
+    p.check_socks_port(9150)
+    for bad in (1080, 12345, 0):
+        with pytest.raises(PolicyError):
+            p.check_socks_port(bad)
+    with pytest.raises(PolicyError):
+        Policy.from_dict({"allow_harden": False}).check_socks_port(9050)

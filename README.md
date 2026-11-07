@@ -33,6 +33,31 @@ connection, bypassing any proxy or connect guard you have set up in mIRC, so the
 | `send_message(cid, target, text, kind)` | `msg` / `notice` / `action` to an allowlisted target |
 | `irc_command(cid, command, target, text)` | one of `join part whois names topic` (default allows `whois names topic`) |
 | `evaluate_identifier(cid, name, args, prop)` | one allowlisted identifier, e.g. `$chan(#x).topic` |
+| `audit_settings()` | reads fixed leak-relevant `mirc.ini` keys (proxy, identd, DDE, update check) after `/saveini` and lists problems; the SOCKS password key is never read |
+| `harden_settings(tor_port)` | tightening only: `/proxy -cm5+d 127.0.0.1 <port>` and `/proxy on` (SOCKS5, DCC included, user/password cleared), `/identd off`, `/ddeserver off`. The port must be in `tor_socks_ports` (default 9050, 9150); `allow_harden = false` removes the tool |
+
+Settings are changed with mIRC's own commands rather than by editing `mirc.ini`, because
+mIRC rewrites that file from memory on exit and would undo an edit made while it runs.
+
+### mIRC and Tor: what was verified (mIRC 7.86, 2026-11-07)
+
+- **With the SOCKS5 proxy on, mIRC hands a `.onion` name to the proxy unresolved.** A fake
+  SOCKS5 server received `CONNECT ATYP=3 <name>.onion:6697`, and the Windows DNS cache had no
+  entry for the name. So pointing mIRC at Tor's SOCKS port is enough to reach an onion
+  service; no relay or torsocks-style wrapper is needed.
+- **With the proxy off, mIRC asks Windows DNS for the name** and fails with "Unable to resolve
+  server". That leaks the onion name to your DNS resolver. [RFC 7686 §2](https://www.rfc-editor.org/rfc/rfc7686.html#section-2)
+  says applications that don't implement Tor "SHOULD NOT perform a DNS lookup" for `.onion`.
+- **With the proxy on, `127.0.0.1` targets go through the proxy too** (`ATYP=1 127.0.0.1`), so
+  a local relay stops being reachable once the proxy is on.
+- **mIRC can contact `www.mirc.com` (port 443) at startup outside any proxy**, even with
+  `[update] check=0`. A fresh unregistered instance did so in every run. The proxy settings
+  don't cover this, so block `mirc.exe` outbound in Windows Firewall if mIRC must never touch
+  the network itself.
+
+Earlier reports of the same `.onion` problem in other clients: the [mIRC forum on SOCKS5 and
+DNS](https://forums.mirc.com/ubbthreads.php/topics/216565), an [AdiIRC thread](https://dev.adiirc.com/boards/1/topics/882)
+where a DNS check before proxying broke `.onion`, and the [TripSit Tor proxy guide](https://wiki.tripsit.me/wiki/Proxy_Configuration_for_Tor).
 
 There is deliberately **no raw command and no raw evaluate tool**. Evaluating an
 arbitrary mIRC expression is code execution (`$dll`, `$com`, custom aliases), and a raw
@@ -90,7 +115,7 @@ evaluating still work.
 ## Tests
 
 - `pytest`: policy unit tests, which need no mIRC.
-- `python tools\smoke.py`: an end-to-end test (23 checks, all passing on mIRC 7.86 on
+- `python tools\smoke.py`: an end-to-end test (29 checks, all passing on mIRC 7.86 on
   2026-11-07). It starts a throwaway mIRC with its own settings folder
   (`-r <temp> -noreg -noconnect`, no update check, identd off) and drives it by process id
   against a fake IRC server on 127.0.0.1. A background thread closes that instance's own

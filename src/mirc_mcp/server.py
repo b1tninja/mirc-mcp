@@ -138,6 +138,64 @@ class Mirc:
         self._connection(cid)
         return self._eval(f"$mcp.ev({cid},{b64(expr)})")
 
+    # ---- settings ------------------------------------------------------------
+    # Fixed mirc.ini keys only. The SOCKS password key is never read.
+    AUDIT_KEYS = (
+        ("socks", "enabled"), ("socks", "method"), ("socks", "hostname"), ("socks", "port"),
+        ("socks", "dccs"), ("socks", "userid"), ("ident", "active"), ("dde", "ServerStatus"),
+        ("update", "check"),
+    )
+
+    def audit(self) -> dict[str, object]:
+        """Read leak-relevant settings (after /saveini, so the file matches what mIRC holds)."""
+        self.bridge.command("/saveini", flood_protection=False)
+        v = {f"{s}.{k}": self._eval(f"$readini($mircini,n,{s},{k})") for s, k in self.AUDIT_KEYS}
+        findings = []
+        proxy_ok = (
+            v["socks.enabled"] == "yes"
+            and v["socks.method"] == "5"
+            and v["socks.hostname"] in ("127.0.0.1", "localhost")
+            and v["socks.port"].isdigit()
+            and int(v["socks.port"]) in self.policy.tor_socks_ports
+        )
+        if not proxy_ok:
+            findings.append(
+                "Server connections do not go through a local Tor SOCKS5 proxy: hostnames are resolved by "
+                "Windows DNS and connections go out directly (a .onion name then fails with 'Unable to resolve "
+                "server' and is leaked to the DNS resolver)."
+            )
+        if v["socks.dccs"] != "yes":
+            findings.append("DCC is not routed through the proxy (matters only if DCC is ever allowed).")
+        if v["socks.userid"]:
+            findings.append("A SOCKS user ID is stored; Tor does not need one (harden clears it and the password).")
+        if v["ident.active"] != "no":
+            findings.append("The identd server is on: it listens on TCP 113 while connecting.")
+        if v["dde.ServerStatus"] != "off":
+            findings.append("The DDE server is on: any local program can drive mIRC through it (mirc-mcp does not need it).")
+        if v["update.check"] not in ("0", ""):
+            findings.append("Automatic update checks are on: mIRC contacts its website directly.")
+        return {"settings": v, "findings": findings, "ok": not findings}
+
+    def harden(self, tor_port: int) -> dict[str, object]:
+        """Apply fixed, tightening-only changes, then re-audit. Nothing here can loosen a setting."""
+        self.policy.check_socks_port(tor_port)
+        for line in (
+            f"/proxy -cm5+d 127.0.0.1 {tor_port}",  # SOCKS5, DCC via proxy too, clear user/password
+            "/proxy on",
+            "/identd off",
+            "/ddeserver off",
+        ):
+            log.info("harden: %s", line)
+            self.bridge.command(line, flood_protection=False)
+        result = self.audit()
+        result["note"] = (
+            "With the proxy on, mIRC sends every server connection through it, 127.0.0.1 included, so a local "
+            "relay is no longer reachable; connect to the .onion name directly instead (mIRC hands the name to the "
+            "proxy unresolved, verified on 7.86). Update checks are not changed here, and mIRC can still contact "
+            "www.mirc.com outside the proxy: block mirc.exe outbound in Windows Firewall to stop that."
+        )
+        return result
+
 
 def build(m: Mirc) -> MCPServer:
     server = MCPServer(
@@ -185,6 +243,18 @@ def build(m: Mirc) -> MCPServer:
     def evaluate_identifier(cid: int, name: str, args: list[str] | None = None, prop: str | None = None) -> str:
         """Evaluate one allowlisted mIRC identifier in a connection, e.g. name='chan', args=['#x'], prop='topic' -> $chan(#x).topic."""
         return guarded(m.identifier, cid, name, args or [], prop)
+
+    @server.tool()
+    def audit_settings() -> dict[str, object]:
+        """Read mIRC's leak-relevant settings (proxy, identd, DDE, update check) and list problems. Read-only apart from /saveini."""
+        return guarded(m.audit)
+
+    if m.policy.allow_harden:
+
+        @server.tool()
+        def harden_settings(tor_port: int = 9050) -> dict[str, object]:
+            """Route mIRC through the local Tor SOCKS5 proxy (127.0.0.1:tor_port, DCC included) and turn off identd and the DDE server. Tightening only."""
+            return guarded(m.harden, tor_port)
 
     return server
 

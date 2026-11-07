@@ -306,9 +306,26 @@ def main() -> int:
         check("whois reaches server", bool(wait("WHOIS", lambda: [l for l in irc.received if l.upper().startswith("WHOIS")])))
 
         tools = asyncio.run(mcp_client_roundtrip(policy_path, proc.pid))
-        expected = {"evaluate_identifier", "irc_command", "list_connections", "list_windows", "read_messages", "send_message"}
+        expected = {"evaluate_identifier", "irc_command", "list_connections", "list_windows", "read_messages", "send_message", "audit_settings", "harden_settings"}
         check("MCP stdio: tools listed", expected <= set(tools[:-1]), tools)
         check("MCP stdio: list_connections over the protocol", "fake.local" in tools[-1] or "127.0.0.1" in tools[-1], tools[-1])
+
+        # Settings last: turning the proxy on changes how this instance would connect.
+        before = m.audit()
+        check("audit flags proxy off, identd/DDE on", len(before["findings"]) >= 2 and not before["ok"], before)
+        check("audit never returns the SOCKS password key", not any("pw" in k for k in before["settings"]))
+        check("harden refuses a port outside tor_socks_ports", refused(m.harden, 1080))
+        check("harden refused when allow_harden is false", refused(Mirc(bridge, Policy.from_dict({"allow_harden": False})).harden, 9050))
+        after = m.harden(9050)
+        st = after["settings"]
+        check(
+            "harden: SOCKS5 127.0.0.1:9050 on, DCC via proxy, identd and DDE off",
+            st["socks.enabled"] == "yes" and st["socks.method"] == "5" and st["socks.port"] == "9050"
+            and st["socks.dccs"] == "yes" and st["ident.active"] == "no" and st["dde.ServerStatus"] == "off",
+            after,
+        )
+        rest = [f for f in after["findings"] if "update" not in f.lower()]
+        check("harden leaves no finding except possibly update checks", not rest, after["findings"])
     except BaseException:
         diagnose(bridge, proc.pid)
         raise
