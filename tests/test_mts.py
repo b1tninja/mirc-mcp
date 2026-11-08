@@ -91,3 +91,10 @@ def test_requires_mts_section_and_mts_file(tmp_path):
     g = tmp_path / "theme.mts"
     g.write_bytes(THEME.replace("someone", "s\xf8me").encode("cp1252"))  # legacy encoding
     assert load(g).name == "Test Theme"
+
+
+def test_accepts_utf8_byte_order_mark(tmp_path):
+    g = tmp_path / "bom.mts"
+    g.write_bytes(b"\xef\xbb\xbf" + THEME.encode("utf-8"))
+    assert load(g).name == "Test Theme"
+    assert parse("\ufeff" + THEME).colors is not None

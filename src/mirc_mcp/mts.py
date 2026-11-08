@@ -67,6 +67,7 @@ class Theme:
 
 
 def _sections(text: str) -> dict[str, dict[str, str]]:
+    text = text.lstrip("﻿")  # many themes start with a UTF-8 byte-order mark
     sections: dict[str, dict[str, str]] = {}
     current = None
     for raw in text.splitlines():
@@ -159,7 +160,7 @@ def load(path: Path, scheme: str | None = None) -> Theme:
         raise ThemeError(f"theme file is larger than {MAX_BYTES} bytes")
     raw = path.read_bytes()
     try:
-        text = raw.decode("utf-8")
+        text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         text = raw.decode("cp1252", errors="replace")
     return parse(text, scheme)
