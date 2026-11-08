@@ -56,7 +56,9 @@ configured nick to the bouncer's nick. `mirc_status` warns while the two differ.
 ### Included theme
 
 `themes/phosphor.mts` is an original appearance-only MTS theme: green phosphor on black in
-Consolas 14 pt (a negative MTS font size is a point size), like an old terminal. Notices and CTCP are amber, highlights yellow, kicks red. Scheme 1
+Consolas 14 pt (a negative MTS font size is a point size), like an old terminal. Notices and CTCP are amber, highlights yellow, kicks red, and colours 2 and 12 (the blues
+bots and servers use for links) are a bright cyan-blue. Every palette colour has at least 7:1
+contrast on the black background (WCAG AAA). Scheme 1
 is an amber CRT. It contains no script, event, image or sound lines, so it is safe with any MTS
 engine. Try it with `apply_mts_theme("themes/phosphor.mts")` (dry run), then `dry_run=false`.
 
