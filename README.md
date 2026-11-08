@@ -99,8 +99,12 @@ tiled (`-t`), so it covers a window of any size at 1:1 with no stretching:
 
 mIRC's own nick colours (`/cnick`) colour the nicklist only, never the nick inside a message line
 (verified on 7.86). `mirc/phosphor-nicks.mrc` is a small display-only script that redraws incoming
-channel and private messages and actions with the nick in the theme's "nick" colour and the text in
-"normal" or "action". It only echoes and halts the default line: it sends nothing and leaves CTCP alone.
+channel and private messages and actions so each nick has its own colour and the text stays in "normal"
+or "action". The colour comes from an MD5 hash of the lower-cased nick, so a nick looks the same
+everywhere and after restarts. It picks from nine of mIRC's fixed extended colours (grey, lavender,
+olive, teal, orange, mint, pink, peach, magenta), each 7.9:1 or better on black and kept away from the
+message green, kicks, highlights, links and parts; with nine colours some nicks will share one. Edit
+`pn.palette` to change the set. It only echoes and halts the default line: it sends nothing and leaves CTCP alone.
 Your own lines are drawn by mIRC itself and keep the "own" colour. Load it with `/load -rs phosphor-nicks.mrc`.
 
 ### Certificate pinning
