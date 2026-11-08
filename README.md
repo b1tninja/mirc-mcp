@@ -65,7 +65,8 @@ engine. Try it with `apply_mts_theme("themes/phosphor.mts")` (dry run), then `dr
 ### CRT scanlines
 
 `themes/phosphor-scanlines.bmp` (made by `tools/make_scanlines.py`) is an 8x3 tile of faint green
-scanlines for Phosphor. Main text keeps 14:1 contrast on its brightest row and the dimmest colours 6.3:1.
+scanlines for Phosphor: two black rows and one green line, as bright as it can be while every palette
+colour keeps at least 4.5:1 contrast on the line (main text 10:1).
 Copy it into mIRC's folder and tile it with mIRC's own command (verified on 7.86: `-s` is the
 status window, `-e` with `#` or `=` sets the default for every channel or query window):
 

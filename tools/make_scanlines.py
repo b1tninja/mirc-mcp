@@ -1,14 +1,14 @@
 """Write themes/phosphor-scanlines.bmp: a small tile of CRT scanlines (24-bit BMP, stdlib only).
 
-Rows repeat every 3 pixels: two near-black rows with a faint green cast, one slightly
-brighter green row. Kept very dark so text contrast stays high."""
+Rows repeat every 3 pixels: two black rows and one green scanline row, as bright as it can be
+while every Phosphor palette colour keeps at least 4.5:1 contrast on it."""
 
 import struct
 import sys
 from pathlib import Path
 
 W, H = 8, 3
-ROWS = [(0, 6, 2), (0, 6, 2), (0, 22, 8)]  # R, G, B per row (top to bottom)
+ROWS = [(0, 0, 0), (0, 0, 0), (0, 54, 19)]  # black, black, scanline (brightest that keeps 4.5:1 for every Phosphor colour)
 
 
 def bmp(width, height, rows):
