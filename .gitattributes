@@ -1,2 +1,4 @@
 *.mrc text eol=crlf
 *.mts text eol=crlf
+*.ps1 text eol=crlf
+*.sgp text eol=crlf

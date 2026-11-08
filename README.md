@@ -79,6 +79,33 @@ status window, `-e` with `#` or `=` sets the default for every channel or query 
 `/background -sx`, `-ex #`, `-ex =` remove them. Glow and screen curvature need a shader overlay
 such as ShaderGlass; mIRC has no way to draw them.
 
+### Digital rain and CRT glow
+
+`themes/phosphor-rain.png` (made by `tools/make_rain.ps1`) is an original 2560x1440 "digital rain" background:
+half-width katakana, digits and symbols falling in columns, with the scanlines baked in. No pixel is
+brighter than (0,54,19), so every Phosphor colour keeps at least 4.5:1 contrast anywhere on it. Show it
+unscaled so glyphs and scanlines stay sharp (`-n` is mIRC's "normal" placement):
+
+```
+/background -sn "phosphor-rain.png"
+/background -en # "phosphor-rain.png"
+/background -en = "phosphor-rain.png"
+```
+
+`-Seed` gives another pattern; `-Width`/`-Height` another screen size.
+
+For real glow and curvature, [ShaderGlass](https://github.com/mausimus/ShaderGlass) (GPL-3.0) can run a
+RetroArch CRT shader over mIRC. `themes/shaderglass-mirc-crt.sgp` is a Window Clone profile with
+`crt/crt-geom-deluxe` at 1:1 scale, so text stays sharp:
+
+```
+ShaderGlass.exe -i mIRC -ac shaderglass-mirc-crt.sgp
+```
+
+`-i` picks the window by title prefix and `-ac` closes ShaderGlass with mIRC. In Clone mode ShaderGlass
+shows a copy, so you type in mIRC itself. ShaderGlass 1.3.2's release zip carries no Authenticode
+signature but does carry the author's PGP signature (`ShaderGlass.exe.asc`); check it before running.
+
 ### Certificate pinning
 
 mIRC 7.86 remembers certificates in `servers.ini` under `[sslcache]` as
