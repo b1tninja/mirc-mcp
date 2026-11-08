@@ -62,6 +62,22 @@ contrast on the black background (WCAG AAA). Scheme 1
 is an amber CRT. It contains no script, event, image or sound lines, so it is safe with any MTS
 engine. Try it with `apply_mts_theme("themes/phosphor.mts")` (dry run), then `dry_run=false`.
 
+### CRT scanlines
+
+`themes/phosphor-scanlines.bmp` (made by `tools/make_scanlines.py`) is an 8x3 tile of faint green
+scanlines for Phosphor. Main text keeps 14:1 contrast on its brightest row and the dimmest colours 6.3:1.
+Copy it into mIRC's folder and tile it with mIRC's own command (verified on 7.86: `-s` is the
+status window, `-e` with `#` or `=` sets the default for every channel or query window):
+
+```
+/background -st "phosphor-scanlines.bmp"
+/background -et # "phosphor-scanlines.bmp"
+/background -et = "phosphor-scanlines.bmp"
+```
+
+`/background -sx`, `-ex #`, `-ex =` remove them. Glow and screen curvature need a shader overlay
+such as ShaderGlass; mIRC has no way to draw them.
+
 ### Certificate pinning
 
 mIRC 7.86 remembers certificates in `servers.ini` under `[sslcache]` as
