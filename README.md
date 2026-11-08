@@ -53,6 +53,13 @@ and then renames it, mIRC sends `USERHOST <configured nick>` to the network stra
 welcome. Unticking Options > Connect > Local Info does not stop this. The fix is to set mIRC's
 configured nick to the bouncer's nick. `mirc_status` warns while the two differ.
 
+### Included theme
+
+`themes/phosphor.mts` is an original appearance-only MTS theme: green phosphor on black in
+Consolas, like an old terminal. Notices and CTCP are amber, highlights yellow, kicks red. Scheme 1
+is an amber CRT. It contains no script, event, image or sound lines, so it is safe with any MTS
+engine. Try it with `apply_mts_theme("themes/phosphor.mts")` (dry run), then `dry_run=false`.
+
 ### Certificate pinning
 
 mIRC 7.86 remembers certificates in `servers.ini` under `[sslcache]` as
