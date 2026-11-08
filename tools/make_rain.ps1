@@ -5,17 +5,27 @@
 # No pixel is brighter than (0,54,19): the brightest green at which every Phosphor palette
 # colour keeps at least 4.5:1 contrast, so chat text stays readable over every part of it.
 #
-#   powershell -NoProfile -File tools\make_rain.ps1 -Out themes\phosphor-rain.png [-Width 2560 -Height 1440 -Seed 7]
+#   powershell -NoProfile -File tools\make_rain.ps1 -Out themes\phosphor-rain.png -Tile [-Seed 7]
+#
+# -Tile makes a seamless tile (streams wrap top to bottom, width and height are whole cells and
+# whole scanline periods), for mIRC's tiled background mode: it then covers a window of any size
+# at 1:1, with no stretching. Without -Tile, -Width/-Height give a single full-screen picture.
 
 param(
     [Parameter(Mandatory = $true)][string]$Out,
     [int]$Width = 2560,
     [int]$Height = 1440,
-    [int]$Seed = 7
+    [int]$Seed = 7,
+    [switch]$Tile
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
+if ($Tile) {
+    # 44 columns x 24 rows of 22 px cells = 968 x 528; 528 is a multiple of the 3 px scanline period
+    $Width = 44 * 22
+    $Height = 24 * 22
+}
 $rand = New-Object System.Random($Seed)
 $bmp = New-Object System.Drawing.Bitmap($Width, $Height, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
 $g = [System.Drawing.Graphics]::FromImage($bmp)
@@ -40,7 +50,8 @@ for ($col = 0; $col -lt $cols; $col++) {
         $head = $rand.Next(0, $rows + $len)
         for ($k = 0; $k -lt $len; $k++) {
             $row = $head - $k
-            if ($row -lt 0 -or $row -ge $rows) { continue }
+            if ($Tile) { $row = (($row % $rows) + $rows) % $rows }  # wrap: seamless top/bottom
+            elseif ($row -lt 0 -or $row -ge $rows) { continue }
             # head brightest, tail fades out; the head is at most maxG
             $t = 1.0 - ($k / $len)
             $gv = [int](10 + ($maxG - 10) * [math]::Pow($t, 1.6))

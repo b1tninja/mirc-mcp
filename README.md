@@ -81,30 +81,27 @@ such as ShaderGlass; mIRC has no way to draw them.
 
 ### Digital rain and CRT glow
 
-`themes/phosphor-rain.png` (made by `tools/make_rain.ps1`) is an original 2560x1440 "digital rain" background:
+`themes/phosphor-rain-tile.png` (made by `tools/make_rain.ps1 -Tile`) is an original, seamless "digital rain" tile:
 half-width katakana, digits and symbols falling in columns, with the scanlines baked in. No pixel is
 brighter than (0,54,19), so every Phosphor colour keeps at least 4.5:1 contrast anywhere on it. Show it
-unscaled so glyphs and scanlines stay sharp (`-n` is mIRC's "normal" placement):
+tiled (`-t`), so it covers a window of any size at 1:1 with no stretching:
 
 ```
-/background -sn "phosphor-rain.png"
-/background -en # "phosphor-rain.png"
-/background -en = "phosphor-rain.png"
+/background -st "phosphor-rain-tile.png"
+/background -et # "phosphor-rain-tile.png"
+/background -et = "phosphor-rain-tile.png"
 ```
 
-`-Seed` gives another pattern; `-Width`/`-Height` another screen size.
+`-Seed` gives another pattern. Without `-Tile` the script makes one full-screen picture instead
+(`themes/phosphor-rain.png`, 2560x1440), which only fills a window up to that size.
 
-For real glow and curvature, [ShaderGlass](https://github.com/mausimus/ShaderGlass) (GPL-3.0) can run a
-RetroArch CRT shader over mIRC. `themes/shaderglass-mirc-crt.sgp` is a Window Clone profile with
-`crt/crt-geom-deluxe` at 1:1 scale, so text stays sharp:
+### Nick colour in messages
 
-```
-ShaderGlass.exe -i mIRC -ac shaderglass-mirc-crt.sgp
-```
-
-`-i` picks the window by title prefix and `-ac` closes ShaderGlass with mIRC. In Clone mode ShaderGlass
-shows a copy, so you type in mIRC itself. ShaderGlass 1.3.2's release zip carries no Authenticode
-signature but does carry the author's PGP signature (`ShaderGlass.exe.asc`); check it before running.
+mIRC's own nick colours (`/cnick`) colour the nicklist only, never the nick inside a message line
+(verified on 7.86). `mirc/phosphor-nicks.mrc` is a small display-only script that redraws incoming
+channel and private messages and actions with the nick in the theme's "nick" colour and the text in
+"normal" or "action". It only echoes and halts the default line: it sends nothing and leaves CTCP alone.
+Your own lines are drawn by mIRC itself and keep the "own" colour. Load it with `/load -rs phosphor-nicks.mrc`.
 
 ### Certificate pinning
 
