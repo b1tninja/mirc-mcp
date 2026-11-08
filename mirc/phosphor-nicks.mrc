@@ -34,19 +34,39 @@ alias -l pn.nick {
   return $+($pn.cnum($pn.nickcolour($2)), %n)
 }
 
+; The message exactly as sent, spaces included. $1- re-splits the text on spaces and collapses
+; runs of them, which wrecks ASCII art, so the text is cut from the raw line instead: after an
+; optional IRCv3 tag block (@...) and the :prefix, the trailing parameter starts at the first " :".
+; For actions ($1 = 1), the CTCP wrapper <ctrl-A>ACTION ...<ctrl-A> is removed.
+alias -l pn.text {
+  var %r = $rawmsg, %p = 1
+  if ($left(%r, 1) == @) %p = $calc($pos(%r, $chr(32), 1) + 1)
+  var %q = $pos($mid(%r, $calc(%p + 1)), $+($chr(32), :), 1)
+  if (!%q) return $+($replace($2-, $chr(32), $+($chr(2), $chr(2), $chr(32))), $chr(2), $chr(2))
+  var %t = $mid(%r, $calc(%p + %q + 2))
+  if ($1 == 1) {
+    if ($left(%t, 8) == $+($chr(1), ACTION, $chr(32))) %t = $mid(%t, 9)
+    if ($right(%t, 1) == $chr(1)) %t = $left(%t, -1)
+  }
+  ; /echo squeezes runs of spaces too, so put an invisible bold-on/bold-off pair (two ctrl-B) before
+  ; each space: no two spaces are then adjacent, and colour and style are unchanged.
+  ; one more pair at the end keeps a trailing space (coloured art often ends in one)
+  return $+($replace(%t, $chr(32), $+($chr(2), $chr(2), $chr(32))), $chr(2), $chr(2))
+}
+
 on ^*:TEXT:*:#: {
-  echo -tlbfmr $chan $+($pn.c(nick), <, $pn.nick($chan, $nick), $pn.c(nick), >) $+($pn.c(normal), $1-)
+  echo -tlbfmr $chan $+($pn.c(nick), <, $pn.nick($chan, $nick), $pn.c(nick), >) $+($pn.c(normal), $pn.text(0))
   haltdef
 }
 on ^*:TEXT:*:?: {
-  echo -tlbfmr $nick $+($pn.c(nick), <, $pn.nick($nick, $nick), $pn.c(nick), >) $+($pn.c(normal), $1-)
+  echo -tlbfmr $nick $+($pn.c(nick), <, $pn.nick($nick, $nick), $pn.c(nick), >) $+($pn.c(normal), $pn.text(0))
   haltdef
 }
 on ^*:ACTION:*:#: {
-  echo -tlbfmr $chan $+($pn.c(action), *) $pn.nick($chan, $nick) $+($pn.c(action), $1-)
+  echo -tlbfmr $chan $+($pn.c(action), *) $pn.nick($chan, $nick) $+($pn.c(action), $pn.text(1))
   haltdef
 }
 on ^*:ACTION:*:?: {
-  echo -tlbfmr $nick $+($pn.c(action), *) $pn.nick($nick, $nick) $+($pn.c(action), $1-)
+  echo -tlbfmr $nick $+($pn.c(action), *) $pn.nick($nick, $nick) $+($pn.c(action), $pn.text(1))
   haltdef
 }
